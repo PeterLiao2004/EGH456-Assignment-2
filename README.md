@@ -132,6 +132,46 @@ To reduce dependency on the single physical motor, the project is split so that 
 - Sensor data ready for UI or control integration
 
 ---
+## File Structure Overview
+
+The project is organised by subsystem so each team member can work as independently as possible before final integration.
+
+- **`include/`**  
+  Shared header files, public APIs, common enums/structs, and project-wide configuration.
+
+- **`src/control/`**  
+  High-level motor control logic, including the state machine, speed control, braking, and fault handling.
+
+- **`src/motor/`**  
+  Low-level motor hardware code, including hall sensor handling, commutation, and motor feedback.
+
+- **`src/ui/`**  
+  LCD display and touchscreen interface code.
+
+- **`src/sensors/`**  
+  I2C sensor drivers and sensor data handling.
+
+- **`src/drivers/`**  
+  Low-level hardware drivers, board-support code, and third-party driver code.
+
+- **`src/rtos/`**  
+  FreeRTOS-related code such as task creation, queues, and synchronisation setup.
+
+- **`src/utils/`**  
+  Small shared helper functions such as conversions, logging, and debounce utilities.
+
+- **`src/main.c`**  
+  Main program entry point and top-level integration.
+
+- **`src/startup_gcc.c`**  
+  Startup and interrupt vector setup for the target platform.
+
+- **`platformio.ini`**  
+  PlatformIO project configuration.
+
+- **`README.md`**  
+  Project overview, team split, hardware requirements, and setup notes.
+---
 
 ## Shared Files
 
