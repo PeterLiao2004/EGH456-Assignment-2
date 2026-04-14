@@ -157,6 +157,62 @@ To reduce dependency on the single physical motor, the project is split so that 
 | I2C sensors | Mostly | Requires sensors, but not the motor |
 
 ---
+## Suggested APIs by Module
+### 1. Motor Hardware / Commutation API
+
+Owned by Person 1
+
+These functions expose real motor feedback and low-level motor actions.
+```
+void motor_hw_init(void);
+void motor_hw_update_commutation(uint8_t hall_state);
+uint8_t motor_hw_get_hall_state(void);
+float motor_hw_get_speed_rpm(void);
+bool motor_hw_is_running(void);
+void motor_hw_stop(void);
+```
+### 2. Control Logic API
+
+Owned by Person 2
+
+These functions handle high-level motor behaviour and control requests.
+```
+void motor_control_init(void);
+void motor_control_step(void);
+
+void motor_control_request_start(void);
+void motor_control_request_stop(void);
+void motor_control_trigger_estop(void);
+void motor_control_ack_fault(void);
+
+motor_state_t motor_control_get_state(void);
+float motor_control_get_target_speed(void);
+```
+### 3. UI API
+
+Owned by Person 3
+
+These functions manage display updates and user input handling.
+```
+void ui_init(void);
+void ui_update(void);
+void ui_show_state(motor_state_t state);
+void ui_show_speed(float target_speed_rpm, float actual_speed_rpm);
+void ui_show_sensor_data(float temperature_c, float distance_mm);
+```
+### 4. Sensor API
+
+Owned by Person 4
+
+These functions provide sensor readings to the rest of the system.
+```
+void sensors_init(void);
+bool sensors_update(void);
+float sensor_get_temperature(void);
+float sensor_get_distance_mm(void);
+bool sensor_data_valid(void);
+```
+---
 
 ## Integration Order
 
