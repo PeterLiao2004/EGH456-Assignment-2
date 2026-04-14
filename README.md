@@ -200,10 +200,70 @@ To avoid overlap and merge conflicts:
 - Nominate one merge/integration lead for each milestone
 
 ---
+## 🔧 Git Workflow Guide (Team Usage)
 
-## Suggested Role Titles
+To keep our project clean and avoid merge conflicts, please follow this Git workflow.
 
-- **Person 1:** Motor Hardware Lead
-- **Person 2:** Control Systems Lead
-- **Person 3:** User Interface Lead
-- **Person 4:** Sensor/Peripheral Lead
+### ✅ Basic Rules
+- Always pull before starting work
+- Work on your own branch (never directly on main)
+- Make small, frequent commits
+- Open small pull requests (PRs) and merge quickly
+- Communicate if working on shared files
+### 🌿 Branch Workflow
+- Start from the latest main:
+```bash
+git checkout main
+git pull origin main
+```
+- Create a new branch:
+```bash
+git checkout -b feature/your-feature-name
+```
+Work and commit:
+```bash
+git add .
+git commit -m "Describe your change"
+```
+Push your branch:
+```bash
+git push origin feature/your-feature-name
+```
+Open a Pull Request on GitHub
+🔄 Keep Your Branch Updated
+
+Before pushing or opening a PR, update your branch:
+
+```bash
+git checkout main
+git pull origin main
+git checkout feature/your-feature-name
+git rebase main
+```
+🚨 If Push Gets Rejected
+
+If you see something like:
+```bash
+! [rejected] (fetch first)
+```
+Run:
+```bash
+git pull --rebase
+```
+Then push again.
+
+⚙️ Recommended Git Settings (run once)
+```bash
+git config --global pull.rebase true
+git config --global rebase.autoStash true
+```
+These help keep history clean and avoid unnecessary conflicts.
+
+🧠 Team Tips
+Don’t work on the same file at the same time without communicating
+Avoid large PRs — smaller changes are easier to review and merge
+Commit often with clear messages
+If unsure, ask before merging
+📌 Golden Rule
+
+Always sync with main before pushing your work.
