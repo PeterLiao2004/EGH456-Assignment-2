@@ -1,7 +1,16 @@
 # EGH456-Assignment-2
 EGH456 Group Assignment
 
+## Project Description
+
+This project involves designing and implementing an embedded control system for an electric vehicle motor platform using the Tiva C Launchpad and supporting hardware. The system includes low-level BLDC motor commutation, high-level motor state and speed control, user interaction through an LCD touchscreen, and sensor integration through I2C peripherals. The project is developed as a modular team-based system so that each subsystem can be implemented and tested as independently as possible before final integration.
+
 ## Team Work Split
+
+- **Person 1:** Motor hardware, hall sensors, and BLDC commutation
+- **Person 2:** Motor control logic, FSM, speed control, and fault handling
+- **Person 3:** LCD display and touchscreen user interface
+- **Person 4:** I2C sensors and peripheral drivers
 
 To reduce dependency on the single physical motor, the project is split so that only one person needs regular access to the motor hardware. The other team members can work mostly independently using agreed interfaces, mock data, and their own peripherals.
 
