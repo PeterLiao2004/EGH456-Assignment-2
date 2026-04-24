@@ -13,10 +13,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-/*-----------------------------------------------------------*/
-/* The system clock frequency. */
-extern volatile uint32_t g_ui32SysClock;
-
 static void prvSystemTask(void *pvParameters);
 
 /* Called by main() to create all application tasks. */

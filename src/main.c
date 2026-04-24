@@ -28,8 +28,8 @@
 /* The system clock frequency. */
 volatile uint32_t g_ui32SysClock;
 
-/* Global for binary semaphore shared between tasks. */
-SemaphoreHandle_t xDisplaySemaphore = NULL;
+/* Global shared binary semaphore for application tasks. */
+SemaphoreHandle_t xSystemSemaphore = NULL;
 
 /* Set up the clock and board pin configuration. */
 static void prvSetupHardware( void );
@@ -41,9 +41,9 @@ int main( void )
     prvSetupHardware();
 
     /* Create shared RTOS primitives used by application tasks. */
-    xDisplaySemaphore = xSemaphoreCreateBinary();
+    xSystemSemaphore = xSemaphoreCreateBinary();
 
-    if ((xDisplaySemaphore != NULL) )
+    if ((xSystemSemaphore != NULL) )
     {
         /* Create the application subsystem tasks. */
         vCreateTasks();
