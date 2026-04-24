@@ -25,6 +25,7 @@
 #include "driverlib/timer.h"
 #include "drivers/rtos_hw_drivers.h"
 #include "utils/uartstdio.h"
+#include "motor/motor_tasks.h"
 
 /*-----------------------------------------------------------*/
 
@@ -49,6 +50,8 @@ void vCreateAppTasks(void)
     prvConfigureLED();
     prvConfigureButton();
     prvConfigureHWTimer();
+
+    vCreateMotorTasks();
 
     xTaskCreate(prvHeartbeatTask,
                 "Heartbeat",
