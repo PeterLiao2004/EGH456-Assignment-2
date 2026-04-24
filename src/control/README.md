@@ -1,29 +1,9 @@
 # Control Module
 
-This folder contains the high-level motor control logic for the project.
+High-level control subsystem.
 
-## Responsibilities
-- Motor state machine
-- Start/stop behaviour
-- E-stop braking logic
-- Fault handling and fault latching
-- Speed target generation
-- Acceleration and deceleration profiles
+- Owns the control state machine, speed targets, and fault handling
+- Contains the control task scaffold in `control_tasks.c`
+- Current task behavior: prints status to UART for bring-up
 
-## Typical Files
-- `motor_control.c`
-- `motor_control.h`
-- `speed_profile.c`
-
-## Inputs
-- Hall/speed feedback from the motor module
-- User commands from the UI
-- Optional sensor-based fault conditions
-
-## Outputs
-- Target motor speed
-- Motor control requests
-- Current motor state
-
-## Owned By
-Person 2 — Control Systems Lead
+Keep low-level motor hardware code out of this folder.
