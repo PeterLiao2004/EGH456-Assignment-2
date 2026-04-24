@@ -25,7 +25,11 @@
 #include "driverlib/timer.h"
 #include "drivers/rtos_hw_drivers.h"
 #include "utils/uartstdio.h"
+
+/* Application includes. */
 #include "motor/motor_tasks.h"
+#include "control/control_tasks.h"
+#include "ui/ui_tasks.h"
 
 /*-----------------------------------------------------------*/
 
@@ -47,25 +51,30 @@ static void prvConfigureButton(void);
 
 void vCreateAppTasks(void)
 {
+    /* Configure the peripherals used by the application tasks. */
     prvConfigureLED();
     prvConfigureButton();
     prvConfigureHWTimer();
 
+    /* Create the application tasks. */
     vCreateMotorTasks();
+    vCreateControlTasks();
+    //vCreateSensorTasks();
+    vCreateUiTasks();
 
-    xTaskCreate(prvHeartbeatTask,
-                "Heartbeat",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+    // xTaskCreate(prvHeartbeatTask,
+    //             "Heartbeat",
+    //             configMINIMAL_STACK_SIZE,
+    //             NULL,
+    //             tskIDLE_PRIORITY + 1,
+    //             NULL);
 
-    xTaskCreate(prvButtonTask,
-                "Button",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+    // xTaskCreate(prvButtonTask,
+    //             "Button",
+    //             configMINIMAL_STACK_SIZE,
+    //             NULL,
+    //             tskIDLE_PRIORITY + 1,
+    //             NULL);
 }
 
 /*-----------------------------------------------------------*/
