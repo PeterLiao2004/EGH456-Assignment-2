@@ -1,10 +1,8 @@
 /*
- * example game task main
+ * Application entry point and RTOS startup.
  *
- * This file is meant to be a starting point for your game.  It includes the
- * basic setup for a FreeRTOS application, including the creation of a task and
- * a timer interrupt.  You will need to add additional tasks in the game_tasks.c file.
- * 
+ * This file is responsible for hardware initialization, creating any shared
+ * RTOS primitives needed during startup, and starting the FreeRTOS scheduler.
  */
 
 /* Standard includes. */
@@ -31,34 +29,24 @@
 volatile uint32_t g_ui32SysClock;
 
 /* Global for binary semaphore shared between tasks. */
-SemaphoreHandle_t xGameUpdateSemaphore = NULL;
-SemaphoreHandle_t xGameStartSemaphore = NULL;
 SemaphoreHandle_t xDisplaySemaphore = NULL;
 
-/* Set up the clock and pin configurations to run this example. */
+/* Set up the clock and board pin configuration. */
 static void prvSetupHardware( void );
-
-/* function to create the game display task. */
-extern void vCreateDisplayTask( void );
 /*-----------------------------------------------------------*/
 
 int main( void )
 {
-    /* Prepare the hardware to run this example. */
+    /* Prepare the hardware to run the application. */
     prvSetupHardware();
 
-    /* Create the binary semaphore used to synchronize the button ISR and the
-     * button processing task. */
-    xGameUpdateSemaphore = xSemaphoreCreateBinary();
-    xGameStartSemaphore = xSemaphoreCreateBinary();
+    /* Create shared RTOS primitives used by application tasks. */
     xDisplaySemaphore = xSemaphoreCreateBinary();
 
-    if ( (xGameUpdateSemaphore != NULL) && (xGameStartSemaphore != NULL) && (xDisplaySemaphore != NULL) )
+    if ((xDisplaySemaphore != NULL) )
     {
-        /* Configure application specific hardware and initialize the tasks. */
-        vCreateDisplayTask();
-
-        /* you should add a second create task for game logic here*/
+        /* Create the application subsystem tasks. */
+        vCreateTasks();
 
         /* Start the tasks. */
         vTaskStartScheduler();
@@ -81,9 +69,8 @@ static void prvSetupHardware( void )
             SYSCTL_CFG_VCO_240), configCPU_CLOCK_HZ);
 
     /* Configure device pins. */
-    // This sets most pins to their default use
-    // When using for a different project ensure to configure
-    // project specific pins/devices after this function
+    // This sets most pins to their default use. Configure any
+    // project-specific peripherals after this function returns.
     PinoutSet(false, false);
 }
 /*-----------------------------------------------------------*/
