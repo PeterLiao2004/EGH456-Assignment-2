@@ -36,6 +36,30 @@ src/
   utils/
 ```
 
+Subsystem folders currently contain:
+
+```text
+src/motor/
+  motor_tasks.c
+  motor_tasks.h
+  README.md
+
+src/control/
+  control_tasks.c
+  control_tasks.h
+  README.md
+
+src/sensors/
+  sensor_tasks.c
+  sensor_tasks.h
+  README.md
+
+src/ui/
+  ui_tasks.c
+  ui_tasks.h
+  README.md
+```
+
 ## What Each Top-Level Source Area Is For
 
 - `src/main.c`
@@ -57,16 +81,16 @@ src/
   Toolchain support/configuration file included with the project template.
 
 - `src/control/`
-  High-level control logic module owned by the control lead.
+  High-level control logic module owned by the control lead. Currently contains `control_tasks.c/.h` task scaffolding.
 
 - `src/motor/`
-  Low-level motor and commutation module owned by the motor lead.
+  Low-level motor and commutation module owned by the motor lead. Currently contains `motor_tasks.c/.h` task scaffolding.
 
 - `src/sensors/`
-  Sensor and peripheral interface module owned by the sensors lead.
+  Sensor and peripheral interface module owned by the sensors lead. Currently contains `sensor_tasks.c/.h` task scaffolding.
 
 - `src/ui/`
-  Display and touchscreen interface module owned by the UI lead.
+  Display and touchscreen interface module owned by the UI lead. Currently contains `ui_tasks.c/.h` task scaffolding.
 
 - `src/drivers/`
   Board-specific and shared hardware driver code already included in the template.
@@ -107,20 +131,9 @@ This is valid, but easy to confuse.
 
 This naming keeps the application task setup file clearly separate from the FreeRTOS kernel file.
 
-## Recommended Next Files To Add
+## Task Creation Flow
 
-Right now the subsystem folders are good placeholders, but they only contain README files. A practical next step is to add starter source and header files for each module, for example:
-
-- `src/motor/motor_tasks.c`
-- `src/motor/motor_tasks.h`
-- `src/control/control_tasks.c`
-- `src/control/control_tasks.h`
-- `src/sensors/sensor_tasks.c`
-- `src/sensors/sensor_tasks.h`
-- `src/ui/ui_tasks.c`
-- `src/ui/ui_tasks.h`
-
-Then `vCreateTasks()` in `src/app_tasks.c` can call module-level create functions such as:
+`src/app_tasks.c` is the application task startup point. It calls one module-level create function per subsystem:
 
 ```c
 vMotorTaskCreate();
@@ -129,12 +142,15 @@ vSensorTaskCreate();
 vUiTaskCreate();
 ```
 
+Each subsystem currently contains a minimal task wrapper that calls `xTaskCreate()` internally and provides a placeholder task loop for the team to replace with real logic.
+
 ## Suggested Working Boundaries
 
 - The motor lead should own hall sensors, commutation, and low-level motor hardware code.
 - The control lead should own state logic, ramping, start/stop logic, and fault handling.
 - The UI lead should own LCD output and touchscreen interaction.
 - The sensors lead should own I2C or other sensor interfaces and sensor data formatting.
+- Each lead should primarily implement their task logic inside their own module folder rather than in `src/app_tasks.c`.
 
 ## Team Workflow Notes
 

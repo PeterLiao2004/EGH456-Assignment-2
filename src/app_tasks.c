@@ -13,7 +13,10 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-static void prvSystemTask(void *pvParameters);
+#include "motor/motor_tasks.h"
+#include "control/control_tasks.h"
+#include "sensors/sensor_tasks.h"
+#include "ui/ui_tasks.h"
 
 /* Called by main() to create all application tasks. */
 void vCreateTasks(void);
@@ -21,29 +24,8 @@ void vCreateTasks(void);
 
 void vCreateTasks(void)
 {
-    /* Replace this placeholder with module create calls, for example:
-     * vMotorTaskCreate();
-     * vControlTaskCreate();
-     * vSensorTaskCreate();
-     * vUiTaskCreate();
-     */
-    xTaskCreate(prvSystemTask,
-                "System",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY,
-                NULL);
-}
-
-
-static void prvSystemTask(void *pvParameters)
-{
-    ( void ) pvParameters;
-
-    for( ;; )
-    {
-        /* Placeholder task to keep the scheduler structure valid until
-         * subsystem-specific tasks are added. */
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
+    vMotorTaskCreate();
+    vControlTaskCreate();
+    vSensorTaskCreate();
+    vUiTaskCreate();
 }
