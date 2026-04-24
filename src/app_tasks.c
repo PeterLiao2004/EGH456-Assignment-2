@@ -29,6 +29,7 @@
 /* Application includes. */
 #include "motor/motor_tasks.h"
 #include "control/control_tasks.h"
+#include "sensors/sensor_tasks.h"
 #include "ui/ui_tasks.h"
 
 /*-----------------------------------------------------------*/
@@ -59,8 +60,8 @@ void vCreateAppTasks(void)
     /* Create the application tasks. */
     vCreateMotorTasks();
     vCreateControlTasks();
-    //vCreateSensorTasks();
-    vCreateUiTasks();
+    vCreateSensorTasks();
+    //vCreateUiTasks();
 
     // xTaskCreate(prvHeartbeatTask,
     //             "Heartbeat",
