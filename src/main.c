@@ -15,6 +15,8 @@
 #include "task.h"
 #include "semphr.h"
 
+#include "app_tasks.h"
+
 /* Hardware includes. */
 #include "inc/hw_memmap.h"
 #include "inc/hw_sysctl.h"

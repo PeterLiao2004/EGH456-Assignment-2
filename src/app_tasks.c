@@ -13,14 +13,11 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include "app_tasks.h"
 #include "motor/motor_tasks.h"
 #include "control/control_tasks.h"
 #include "sensors/sensor_tasks.h"
 #include "ui/ui_tasks.h"
-
-/* Called by main() to create all application tasks. */
-void vCreateTasks(void);
-/*-----------------------------------------------------------*/
 
 void vCreateTasks(void)
 {
