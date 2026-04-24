@@ -59,9 +59,9 @@ void vCreateAppTasks(void)
 
     /* Create the application tasks. */
     vCreateMotorTasks();
-    vCreateControlTasks();
-    vCreateSensorTasks();
-    vCreateUiTasks();
+    //vCreateControlTasks();
+    //vCreateSensorTasks();
+    //vCreateUiTasks();
 
     // xTaskCreate(prvHeartbeatTask,
     //             "Heartbeat",
