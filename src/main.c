@@ -3,7 +3,7 @@
  *
  * This file is meant to be a starting point for your game.  It includes the
  * basic setup for a FreeRTOS application, including the creation of a task and
- * a timer interrupt.  You will need to add additional tasks in the game_tasks.c file.
+ * a timer interrupt.  You will need to add additional tasks in the app_tasks.c file.
  * 
  */
 
@@ -25,6 +25,10 @@
 #include "driverlib/rom_map.h"
 #include "driverlib/sysctl.h"
 #include "drivers/rtos_hw_drivers.h"
+#include "driverlib/gpio.h"
+#include "driverlib/uart.h"
+#include "driverlib/pin_map.h"
+#include "utils/uartstdio.h"
 /*-----------------------------------------------------------*/
 
 /* The system clock frequency. */
@@ -72,6 +76,32 @@ int main( void )
     for( ;; );
 }
 /*-----------------------------------------------------------*/
+static void prvConfigureUART(void)
+{
+    /* Enable GPIO port A which is used for UART0 pins.
+     * TODO: change this to whichever GPIO port you are using. */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+
+    /* Configure the pin muxing for UART0 functions on port A0 and A1.
+     * This step is not necessary if your part does not support pin muxing.
+     * TODO: change this to select the port/pin you are using. */
+    GPIOPinConfigure(GPIO_PA0_U0RX);
+    GPIOPinConfigure(GPIO_PA1_U0TX);
+
+    /* Enable UART0 so that we can configure the clock. */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+
+    /* Use the internal 16MHz oscillator as the UART clock source. */
+    UARTClockSourceSet(UART0_BASE, UART_CLOCK_PIOSC);
+
+    /* Select the alternate (UART) function for these pins.
+     * TODO: change this to select the port/pin you are using. */
+    GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+
+    /* Initialize the UART for console I/O. */
+    UARTStdioConfig(0, 9600, 16000000);
+}
+/*-----------------------------------------------------------*/
 
 static void prvSetupHardware( void )
 {
@@ -85,6 +115,7 @@ static void prvSetupHardware( void )
     // When using for a different project ensure to configure
     // project specific pins/devices after this function
     PinoutSet(false, false);
+    prvConfigureUART();
 }
 /*-----------------------------------------------------------*/
 

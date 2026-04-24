@@ -32,6 +32,9 @@
 #include "driverlib/rom_map.h"
 #include "driverlib/timer.h"
 #include "drivers/rtos_hw_drivers.h"
+#include "driverlib/uart.h"
+#include "driverlib/pin_map.h"
+#include "utils/uartstdio.h"
 
 /* Display includes. */
 #include "grlib.h"
@@ -505,6 +508,8 @@ static void prvDisplayTask(void *pvParameters)
         xSemaphoreTake(xDisplaySemaphore, portMAX_DELAY);
 
         taskENTER_CRITICAL();
+
+        UARTprintf("TEST\n");
 
         /* ================= GAME OVER SCREEN ================= */
         if (gameState.gameOver)
