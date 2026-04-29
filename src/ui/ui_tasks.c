@@ -41,6 +41,8 @@ static void prvUiTask(void *pvParameters)
                    ui32UiMessageCount,
                    (uint32_t)xTaskGetTickCount());
 
+        //__asm("BKPT #0");
+
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

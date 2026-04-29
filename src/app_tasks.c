@@ -53,15 +53,15 @@ static void prvConfigureButton(void);
 void vCreateAppTasks(void)
 {
     /* Configure the peripherals used by the application tasks. */
-    prvConfigureLED();
-    prvConfigureButton();
-    prvConfigureHWTimer();
+    //prvConfigureLED();
+    //prvConfigureButton();
+    //prvConfigureHWTimer();
 
     /* Create the application tasks. */
     vCreateMotorTasks();
     vCreateControlTasks();
     vCreateSensorTasks();
-    //vCreateUiTasks();
+    vCreateUiTasks();
 
     // xTaskCreate(prvHeartbeatTask,
     //             "Heartbeat",
