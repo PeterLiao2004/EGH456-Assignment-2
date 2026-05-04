@@ -1,10 +1,8 @@
 /*
- * example game task main
+ * Barebones FreeRTOS application entry point.
  *
- * This file is meant to be a starting point for your game.  It includes the
- * basic setup for a FreeRTOS application, including the creation of a task and
- * a timer interrupt.  You will need to add additional tasks in the game_tasks.c file.
- * 
+ * This file sets up the hardware, creates the shared synchronization objects,
+ * and starts the minimal UART-based application tasks defined in app_tasks.c.
  */
 
 /* Standard includes. */
@@ -25,21 +23,24 @@
 #include "driverlib/rom_map.h"
 #include "driverlib/sysctl.h"
 #include "drivers/rtos_hw_drivers.h"
+#include "driverlib/gpio.h"
+#include "driverlib/uart.h"
+#include "driverlib/pin_map.h"
+#include "utils/uartstdio.h"
 /*-----------------------------------------------------------*/
 
 /* The system clock frequency. */
 volatile uint32_t g_ui32SysClock;
 
-/* Global for binary semaphore shared between tasks. */
-SemaphoreHandle_t xGameUpdateSemaphore = NULL;
-SemaphoreHandle_t xGameStartSemaphore = NULL;
-SemaphoreHandle_t xDisplaySemaphore = NULL;
+/* Global semaphores shared between ISRs and tasks. */
+SemaphoreHandle_t xTimerSemaphore = NULL;
+SemaphoreHandle_t xButtonSemaphore = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware( void );
 
-/* function to create the game display task. */
-extern void vCreateDisplayTask( void );
+/* Function to create the application tasks. */
+extern void vCreateAppTasks( void );
 /*-----------------------------------------------------------*/
 
 int main( void )
@@ -49,16 +50,13 @@ int main( void )
 
     /* Create the binary semaphore used to synchronize the button ISR and the
      * button processing task. */
-    xGameUpdateSemaphore = xSemaphoreCreateBinary();
-    xGameStartSemaphore = xSemaphoreCreateBinary();
-    xDisplaySemaphore = xSemaphoreCreateBinary();
+    xTimerSemaphore = xSemaphoreCreateBinary();
+    xButtonSemaphore = xSemaphoreCreateBinary();
 
-    if ( (xGameUpdateSemaphore != NULL) && (xGameStartSemaphore != NULL) && (xDisplaySemaphore != NULL) )
+    if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
     {
         /* Configure application specific hardware and initialize the tasks. */
-        vCreateDisplayTask();
-
-        /* you should add a second create task for game logic here*/
+        vCreateAppTasks();
 
         /* Start the tasks. */
         vTaskStartScheduler();
@@ -70,6 +68,32 @@ int main( void )
     timer tasks to be created.  See the memory management section on the
     FreeRTOS web site for more details. */
     for( ;; );
+}
+/*-----------------------------------------------------------*/
+static void prvConfigureUART(void)
+{
+    /* Enable GPIO port A which is used for UART0 pins.
+     * TODO: change this to whichever GPIO port you are using. */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOA);
+
+    /* Configure the pin muxing for UART0 functions on port A0 and A1.
+     * This step is not necessary if your part does not support pin muxing.
+     * TODO: change this to select the port/pin you are using. */
+    GPIOPinConfigure(GPIO_PA0_U0RX);
+    GPIOPinConfigure(GPIO_PA1_U0TX);
+
+    /* Enable UART0 so that we can configure the clock. */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_UART0);
+
+    /* Use the internal 16MHz oscillator as the UART clock source. */
+    UARTClockSourceSet(UART0_BASE, UART_CLOCK_PIOSC);
+
+    /* Select the alternate (UART) function for these pins.
+     * TODO: change this to select the port/pin you are using. */
+    GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
+
+    /* Initialize the UART for console I/O. */
+    UARTStdioConfig(0, 9600, 16000000);
 }
 /*-----------------------------------------------------------*/
 
@@ -85,6 +109,7 @@ static void prvSetupHardware( void )
     // When using for a different project ensure to configure
     // project specific pins/devices after this function
     PinoutSet(false, false);
+    prvConfigureUART();
 }
 /*-----------------------------------------------------------*/
 
