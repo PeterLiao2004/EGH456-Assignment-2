@@ -49,7 +49,6 @@ bool Motor_IsStopped(void);
 /*-----------------------------------------------------------*/
 // Private functions
 static void prvMotorTask( void *pvParameters );
-static void prvConfigureHallSensors( void );
 static void prvKickStartMotor( void );
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c );
 static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c );
@@ -84,51 +83,6 @@ static volatile bool g_hallCState;
 static volatile uint32_t g_hallEdgeCount;
 static volatile bool g_hallStateChanged;
 
-static void prvConfigureHallSensors( void )
-{
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOH);
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
-
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM))
-    {
-    }
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOH))
-    {
-    }
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPION))
-    {
-    }
-
-    GPIOPinTypeGPIOInput(HALL_A_PORT, HALL_A_PIN);
-    GPIOPinTypeGPIOInput(HALL_B_PORT, HALL_B_PIN);
-    GPIOPinTypeGPIOInput(HALL_C_PORT, HALL_C_PIN);
-
-    GPIOPadConfigSet(HALL_A_PORT, HALL_A_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
-    GPIOPadConfigSet(HALL_B_PORT, HALL_B_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
-    GPIOPadConfigSet(HALL_C_PORT, HALL_C_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
-
-    GPIOIntDisable(HALL_A_PORT, HALL_A_PIN);
-    GPIOIntDisable(HALL_B_PORT, HALL_B_PIN);
-    GPIOIntDisable(HALL_C_PORT, HALL_C_PIN);
-
-    GPIOIntTypeSet(HALL_A_PORT, HALL_A_PIN, GPIO_BOTH_EDGES);
-    GPIOIntTypeSet(HALL_B_PORT, HALL_B_PIN, GPIO_BOTH_EDGES);
-    GPIOIntTypeSet(HALL_C_PORT, HALL_C_PIN, GPIO_BOTH_EDGES);
-
-    GPIOIntClear(HALL_A_PORT, HALL_A_PIN);
-    GPIOIntClear(HALL_B_PORT, HALL_B_PIN);
-    GPIOIntClear(HALL_C_PORT, HALL_C_PIN);
-
-    GPIOIntEnable(HALL_A_PORT, HALL_A_PIN);
-    GPIOIntEnable(HALL_B_PORT, HALL_B_PIN);
-    GPIOIntEnable(HALL_C_PORT, HALL_C_PIN);
-
-    IntEnable(INT_GPIOM);
-    IntEnable(INT_GPIOH);
-    IntEnable(INT_GPION);
-    IntMasterEnable();
-}
 /*-----------------------------------------------------------*/
 
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c )
@@ -165,7 +119,6 @@ static void prvMotorTask( void *pvParameters )
 
     /* Initialise the motors and set the duty cycle (speed) in microseconds */
     initMotorLib(pwm_period);
-    prvConfigureHallSensors();
     enableMotor();
 
     /* Kick start the motor */

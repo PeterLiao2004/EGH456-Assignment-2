@@ -18,6 +18,7 @@
 /* Hardware includes. */
 #include "inc/hw_memmap.h"
 #include "inc/hw_sysctl.h"
+#include "inc/hw_ints.h"
 #include "driverlib/interrupt.h"
 #include "driverlib/rom.h"
 #include "driverlib/rom_map.h"
@@ -96,6 +97,61 @@ static void prvConfigureUART(void)
     UARTStdioConfig(0, 9600, 16000000);
 }
 /*-----------------------------------------------------------*/
+//  Hall sensor inputs from BoosterPack 1:
+//  Hall A -> PM3, Hall B -> PH2, Hall C -> PN2
+#define HALL_A_PORT GPIO_PORTM_BASE
+#define HALL_A_PIN  GPIO_PIN_3
+#define HALL_B_PORT GPIO_PORTH_BASE
+#define HALL_B_PIN  GPIO_PIN_2
+#define HALL_C_PORT GPIO_PORTN_BASE
+#define HALL_C_PIN  GPIO_PIN_2
+
+static void prvConfigureHallSensors( void )
+{
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOH);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
+
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM))
+    {
+    }
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOH))
+    {
+    }
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPION))
+    {
+    }
+
+    GPIOPinTypeGPIOInput(HALL_A_PORT, HALL_A_PIN);
+    GPIOPinTypeGPIOInput(HALL_B_PORT, HALL_B_PIN);
+    GPIOPinTypeGPIOInput(HALL_C_PORT, HALL_C_PIN);
+
+    GPIOPadConfigSet(HALL_A_PORT, HALL_A_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+    GPIOPadConfigSet(HALL_B_PORT, HALL_B_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+    GPIOPadConfigSet(HALL_C_PORT, HALL_C_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+
+    GPIOIntDisable(HALL_A_PORT, HALL_A_PIN);
+    GPIOIntDisable(HALL_B_PORT, HALL_B_PIN);
+    GPIOIntDisable(HALL_C_PORT, HALL_C_PIN);
+
+    GPIOIntTypeSet(HALL_A_PORT, HALL_A_PIN, GPIO_BOTH_EDGES);
+    GPIOIntTypeSet(HALL_B_PORT, HALL_B_PIN, GPIO_BOTH_EDGES);
+    GPIOIntTypeSet(HALL_C_PORT, HALL_C_PIN, GPIO_BOTH_EDGES);
+
+    GPIOIntClear(HALL_A_PORT, HALL_A_PIN);
+    GPIOIntClear(HALL_B_PORT, HALL_B_PIN);
+    GPIOIntClear(HALL_C_PORT, HALL_C_PIN);
+
+    GPIOIntEnable(HALL_A_PORT, HALL_A_PIN);
+    GPIOIntEnable(HALL_B_PORT, HALL_B_PIN);
+    GPIOIntEnable(HALL_C_PORT, HALL_C_PIN);
+
+    IntEnable(INT_GPIOM);
+    IntEnable(INT_GPIOH);
+    IntEnable(INT_GPION);
+    IntMasterEnable();
+}
+/*-----------------------------------------------------------*/
 
 static void prvSetupHardware( void )
 {
@@ -110,6 +166,7 @@ static void prvSetupHardware( void )
     // project specific pins/devices after this function
     PinoutSet(false, false);
     prvConfigureUART();
+    prvConfigureHallSensors();
 }
 /*-----------------------------------------------------------*/
 
