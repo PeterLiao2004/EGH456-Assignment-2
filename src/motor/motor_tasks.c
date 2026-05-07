@@ -144,17 +144,9 @@ static void prvMotorTask( void *pvParameters )
     ( void ) pvParameters;
 
     /* Initialise the motors and set the duty cycle (speed) in microseconds */
-    initMotorLib(pwm_period);
-    enableMotor();
-    
-    /* Set at >10% to get it to start */
-    setDuty(10); // 10/50 = 20% duty cycle
+    Motor_Init();
 
-    //vTaskDelay(pdMS_TO_TICKS( 2000 ));
-    UARTprintf("Starting Motor Test\r\n");
-    // Kick start the motor
-    prvKickStartMotor();
-    setDuty(5); // drop duty cycle to 10% after kickstart
+    Motor_Start();
 
     //prvReadHallSensors(&hall_a, &hall_b, &hall_c);
     //prvLogHallState("Initial", hall_a, hall_b, hall_c);
@@ -164,8 +156,7 @@ static void prvMotorTask( void *pvParameters )
     {
 
         if(duty_value>=pwm_period){
-            setDuty(0);
-            stopMotor(1);
+            Motor_Stop();
             UARTprintf("Motor Stopped\r\n");
             continue;
         }
@@ -213,24 +204,58 @@ void HallSensorHandler(void)
     
 }
 //--------------------Motor API functions--------------------//
-
+// Initialise motor 
 void Motor_Init(void)
 {
     initMotorLib(MOTOR_PWM_PERIOD);
 
     // Start in a safe known state
     setDuty(0);
-    //stopMotor(1);
+    stopMotor(1);
 
     // Reset motor state variables
     g_motorDuty = 0;
     g_motorRunning = false;
 
-    g_hallAState = false;
-    g_hallBState = false;
-    g_hallCState = false;
+    prvReadHallSensors((bool *)&g_hallAState,
+                       (bool *)&g_hallBState,
+                       (bool *)&g_hallCState);
+
     g_hallEdgeCount = 0;
     g_hallStateChanged = false;
 
     g_motorInitialised = true;
+}
+
+// Start the motor
+void Motor_Start(void)
+{
+    enableMotor();
+
+    /* Use enough duty to overcome static friction. */
+    setDuty(10);
+    g_motorDuty = 10;
+
+    prvKickStartMotor();
+
+    /* Drop back to normal starting duty. */
+    setDuty(5);
+    g_motorDuty = 5;
+
+    g_motorRunning = true;
+}
+
+// Stop the motor
+void Motor_Stop(void)
+{
+    if (!g_motorInitialised)
+    {
+        return;
+    }
+
+    setDuty(0);
+    stopMotor(1);
+
+    g_motorDuty = 0;
+    g_motorRunning = false;
 }
