@@ -67,10 +67,10 @@ void vCreateMotorTasks(void)
 }
 
 //--------------------Private Motor variables and macros--------------------//
-/*
- * Hall sensor inputs from BoosterPack 1:
- * Hall A -> PM3, Hall B -> PH2, Hall C -> PN2
- */
+
+//-------Hall sensors--------
+// Hall sensor inputs from BoosterPack 1:
+// Hall A -> PM3, Hall B -> PH2, Hall C -> PN2
 #define HALL_A_PORT GPIO_PORTM_BASE
 #define HALL_A_PIN  GPIO_PIN_3
 #define HALL_B_PORT GPIO_PORTH_BASE
@@ -78,12 +78,21 @@ void vCreateMotorTasks(void)
 #define HALL_C_PORT GPIO_PORTN_BASE
 #define HALL_C_PIN  GPIO_PIN_2
 
+// Hall sensor state variables
 static volatile bool g_hallAState;
 static volatile bool g_hallBState;
 static volatile bool g_hallCState;
 static volatile uint32_t g_hallEdgeCount;
 static volatile bool g_hallStateChanged;
 
+//---------Motor control varialbes--------
+// Motor PWS period (in microseconds)
+#define MOTOR_PWM_PERIOD 50U
+
+// Motor state variables
+static volatile bool g_motorInitialised = false;
+static volatile bool g_motorRunning = false;
+static volatile uint16_t g_motorDuty = 0;
 
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
@@ -126,6 +135,8 @@ static void prvMotorTask( void *pvParameters )
 {
     uint16_t duty_value = 7; // >10% to get it to start, duty cycle in microseconds
     uint16_t pwm_period = 50;
+
+    // local hall state variables for polling
     bool hall_a = false;
     bool hall_b = false;
     bool hall_c = false;
@@ -135,15 +146,6 @@ static void prvMotorTask( void *pvParameters )
     /* Initialise the motors and set the duty cycle (speed) in microseconds */
     initMotorLib(pwm_period);
     enableMotor();
-
-    /* Kick start the motor */
-    // Do an initial read of the hall effect sensor GPIO lines
-    // give the read hall effect sensor lines to updateMotor() to move the motor
-    // one single phase
-    // Recommendation is to use an interrupt on the hall effect sensors GPIO lines 
-    // So that the motor continues to be updated every time the GPIO lines change from high to low
-    // or low to high
-    // Include the updateMotor function call in the ISR to achieve this behaviour.
     
     /* Set at >10% to get it to start */
     setDuty(10); // 10/50 = 20% duty cycle
@@ -151,7 +153,8 @@ static void prvMotorTask( void *pvParameters )
     //vTaskDelay(pdMS_TO_TICKS( 2000 ));
     UARTprintf("Starting Motor Test\r\n");
     // Kick start the motor
-    Motor_Kickstart();
+    prvKickStartMotor();
+    setDuty(5); // drop duty cycle to 10% after kickstart
 
     //prvReadHallSensors(&hall_a, &hall_b, &hall_c);
     //prvLogHallState("Initial", hall_a, hall_b, hall_c);
@@ -184,9 +187,7 @@ static void prvMotorTask( void *pvParameters )
 
 /*-----------------------------------------------------------*/
 
-
 /* Interrupt handlers */
-
 void HallSensorHandler(void)
 {
     bool hall_a;
@@ -213,3 +214,23 @@ void HallSensorHandler(void)
 }
 //--------------------Motor API functions--------------------//
 
+void Motor_Init(void)
+{
+    initMotorLib(MOTOR_PWM_PERIOD);
+
+    // Start in a safe known state
+    setDuty(0);
+    //stopMotor(false);
+
+    // Reset motor state variables
+    g_motorDuty = 0;
+    g_motorRunning = false;
+
+    g_hallAState = false;
+    g_hallBState = false;
+    g_hallCState = false;
+    g_hallEdgeCount = 0;
+    g_hallStateChanged = false;
+
+    g_motorInitialised = true;
+}
