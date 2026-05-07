@@ -220,7 +220,7 @@ void Motor_Init(void)
 
     // Start in a safe known state
     setDuty(0);
-    //stopMotor(false);
+    //stopMotor(1);
 
     // Reset motor state variables
     g_motorDuty = 0;
