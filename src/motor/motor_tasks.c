@@ -36,16 +36,15 @@
 /*-----------------------------------------------------------*/
 /* Motor control API. Implementations will live in the motor module. */
 void Motor_Init(void);
-void Motor_Enable(void);
-void Motor_Disable(void);
+void Motor_Start(void);
+void Motor_Stop(void);
 
-void Motor_Kickstart(void);
-void Motor_SetDuty(float duty);
+void Motor_SetSpeed(int rpm);
 
-float Motor_GetSpeedRPM(void);
-float Motor_GetDuty(void);
-bool Motor_HasValidHallFeedback(void);
-bool Motor_IsStopped(void);
+void Motor_EStop(void);
+//Motor_GetSpeed(void);
+//Motor_GetState(void);
+
 /*-----------------------------------------------------------*/
 // Private functions
 static void prvMotorTask( void *pvParameters );
@@ -66,6 +65,8 @@ void vCreateMotorTasks(void)
                 tskIDLE_PRIORITY + 2,
                 NULL);
 }
+
+//--------------------Private Motor variables and macros--------------------//
 /*
  * Hall sensor inputs from BoosterPack 1:
  * Hall A -> PM3, Hall B -> PH2, Hall C -> PN2
@@ -83,16 +84,16 @@ static volatile bool g_hallCState;
 static volatile uint32_t g_hallEdgeCount;
 static volatile bool g_hallStateChanged;
 
-/*-----------------------------------------------------------*/
 
+//--------------------Private Motor functions--------------------//
+// Read the current state of the hall effect sensors and return as bools
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c )
 {
     *hall_a = (GPIOPinRead(HALL_A_PORT, HALL_A_PIN) != 0U);
     *hall_b = (GPIOPinRead(HALL_B_PORT, HALL_B_PIN) != 0U);
     *hall_c = (GPIOPinRead(HALL_C_PORT, HALL_C_PIN) != 0U);
 }
-/*-----------------------------------------------------------*/
-
+// Helper: Log current state of Hall sensor via UART
 static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c )
 {
     UARTprintf("%s Hall state A=%d B=%d C=%d edges=%u\r\n",
@@ -102,10 +103,24 @@ static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hal
                hall_c ? 1 : 0,
                (unsigned int)g_hallEdgeCount);
 }
-/*-----------------------------------------------------------*/
 
+// Kick start the motor by reading the hall sensor state and update motor
+static void prvKickStartMotor( void )
+{
+    bool hall_a = false;
+    bool hall_b = false;
+    bool hall_c = false;
 
-/*-----------------------------------------------------------*/
+    // Do an initial read of the hall effect sensor GPIO lines
+    prvReadHallSensors(&hall_a, &hall_b, &hall_c);
+    g_hallAState = hall_a;
+    g_hallBState = hall_b;
+    g_hallCState = hall_c;
+    // give the read hall effect sensor lines to updateMotor() to move the motor one single phase
+    updateMotor(hall_a, hall_b, hall_c);
+}
+
+//---------------------------Motor Task---------------------------//
 /* Motor control task implementation. */
 static void prvMotorTask( void *pvParameters )
 {
@@ -131,15 +146,12 @@ static void prvMotorTask( void *pvParameters )
     // Include the updateMotor function call in the ISR to achieve this behaviour.
     
     /* Set at >10% to get it to start */
-    setDuty(10);
+    setDuty(10); // 10/50 = 20% duty cycle
 
     //vTaskDelay(pdMS_TO_TICKS( 2000 ));
     UARTprintf("Starting Motor Test\r\n");
     // Kick start the motor
-    prvKickStartMotor();
-    vTaskDelay(pdMS_TO_TICKS( 100 ));
-    // Set duty cycle back to the initial value after kick starting the motor
-    setDuty(5);
+    Motor_Kickstart();
 
     //prvReadHallSensors(&hall_a, &hall_b, &hall_c);
     //prvLogHallState("Initial", hall_a, hall_b, hall_c);
@@ -169,22 +181,7 @@ static void prvMotorTask( void *pvParameters )
 
     }
 }
-/*-----------------------------------------------------------*/
 
-static void prvKickStartMotor( void )
-{
-    bool hall_a = false;
-    bool hall_b = false;
-    bool hall_c = false;
-
-    // Do an initial read of the hall effect sensor GPIO lines
-    prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-    g_hallAState = hall_a;
-    g_hallBState = hall_b;
-    g_hallCState = hall_c;
-    // give the read hall effect sensor lines to updateMotor() to move the motor one single phase
-    updateMotor(hall_a, hall_b, hall_c);
-}
 /*-----------------------------------------------------------*/
 
 
@@ -214,4 +211,5 @@ void HallSensorHandler(void)
     // Could also add speed sensing code here too.
     
 }
+//--------------------Motor API functions--------------------//
 
