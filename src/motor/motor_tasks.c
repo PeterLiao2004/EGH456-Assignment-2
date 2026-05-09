@@ -90,7 +90,7 @@ static volatile bool g_hallStateChanged;
 // Motor PWS period (in microseconds)
 #define MOTOR_PWM_PERIOD 50U
 // Speed sensing variables
-#define SPEED_SAMPLE_MS 10U
+#define SPEED_SAMPLE_MS 100U
 #define HALL_EDGES_PER_MECH_REV 24U
 
 // Motor state variables
@@ -100,7 +100,7 @@ static volatile uint16_t g_motorDuty = 0;
 static volatile uint32_t g_motorRpm = 0;
 
 // Ramp control limits
-#define CONTROL_PERIOD_MS       SPEED_SAMPLE_MS
+#define CONTROL_PERIOD_MS       100U
 #define ACCEL_LIMIT_RPM_PER_S   500U
 #define DECEL_LIMIT_RPM_PER_S   500U
 
@@ -289,7 +289,7 @@ static void prvMotorTask( void *pvParameters )
     Motor_Start();
 
     // Temporary test target speed
-    Motor_SetSpeed(2000U);
+    Motor_SetSpeed(1000U);
 
     last_wake_time = xTaskGetTickCount();
 
@@ -311,7 +311,7 @@ static void prvMotorTask( void *pvParameters )
                    (unsigned int)g_motorRpm,
                    (unsigned int)duty_us);
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( CONTROL_PERIOD_MS  ));
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( SPEED_SAMPLE_MS  ));
 
     }
 }
