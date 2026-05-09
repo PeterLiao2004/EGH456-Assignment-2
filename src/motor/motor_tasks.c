@@ -100,7 +100,7 @@ static volatile uint16_t g_motorDuty = 0;
 static volatile uint32_t g_motorRpm = 0;
 
 // Ramp control limits
-#define CONTROL_PERIOD_MS       100U
+#define MOTOR_CONTROL_PERIOD_MS            100U
 #define ACCEL_LIMIT_RPM_PER_S   500U
 #define DECEL_LIMIT_RPM_PER_S   500U
 
@@ -238,7 +238,7 @@ static void prvUpdateSpeedRamp(void)
     if (g_referenceRpm < g_desiredRpm)
     {
         // Accelerating
-        step = (ACCEL_LIMIT_RPM_PER_S * CONTROL_PERIOD_MS) / 1000U;
+        step = (ACCEL_LIMIT_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS     ) / 1000U;
 
         g_referenceRpm += step;
 
@@ -250,7 +250,7 @@ static void prvUpdateSpeedRamp(void)
     else if (g_referenceRpm > g_desiredRpm)
     {
         // Decelerating
-        step = (DECEL_LIMIT_RPM_PER_S * CONTROL_PERIOD_MS) / 1000U;
+        step = (DECEL_LIMIT_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS     ) / 1000U;
 
         if (g_referenceRpm > step)
         {
@@ -305,7 +305,7 @@ static void prvMotorTask( void *pvParameters )
 
         setDuty(duty_us);
 
-        UARTprintf("Desired=%u, Ref=%u, Actual=%u, Duty=%u\r\n",
+        UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u\r\n",
                    (unsigned int)g_desiredRpm,
                    (unsigned int)g_referenceRpm,
                    (unsigned int)g_motorRpm,
