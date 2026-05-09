@@ -99,6 +99,10 @@ static volatile bool g_motorRunning = false;
 static volatile uint16_t g_motorDuty = 0;
 static volatile uint32_t g_motorRpm = 0;
 
+#define CONTROL_PERIOD_MS       10U
+#define ACCEL_LIMIT_RPM_PER_S   500U
+#define DECEL_LIMIT_RPM_PER_S   500U
+
 
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
@@ -162,14 +166,74 @@ static void prvKickStartMotor( void )
     updateMotor(hall_a, hall_b, hall_c);
 }
 
+// Temporary: Rough mapping of RPM to duty cycle for testing. Replace with a proper control algorithm in the future.
+static uint32_t prvRpmToDuty(uint32_t rpm)
+{
+    if (rpm == 0U)
+    {
+        return 0U;
+    }
+    else if (rpm <= 600U)
+    {
+        return 7U;     // ~590 rpm
+    }
+    else if (rpm <= 1000U)
+    {
+        return 9U;     // ~950 rpm
+    }
+    else if (rpm <= 1500U)
+    {
+        return 13U;    // ~1450 rpm
+    }
+    else if (rpm <= 2000U)
+    {
+        return 17U;    // ~2010 rpm
+    }
+    else if (rpm <= 2500U)
+    {
+        return 20U;    // ~2470 rpm
+    }
+    else if (rpm <= 3000U)
+    {
+        return 23U;    // ~2970 rpm
+    }
+    else if (rpm <= 3500U)
+    {
+        return 26U;    // ~3470 rpm
+    }
+    else if (rpm <= 4000U)
+    {
+        return 29U;    // ~3970 rpm
+    }
+    else if (rpm <= 4500U)
+    {
+        return 33U;    // ~4460 rpm
+    }
+    else if (rpm <= 5000U)
+    {
+        return 39U;    // ~5010 rpm
+    }
+    else if (rpm <= 5500U)
+    {
+        return 43U;    // ~5500 rpm
+    }
+    else if (rpm <= 6000U)
+    {
+        return 46U;    // ~5920 rpm
+    }
+    else
+    {
+        return 49U;    // ~6390 rpm max tested
+    }
+}
+
 //---------------------------Motor Task---------------------------//
 /* Motor control task implementation. */
 static void prvMotorTask( void *pvParameters )
 {
     uint16_t duty_value = 7; // >10% to get it to start, duty cycle in microseconds
-    uint16_t pwm_period = 50;
 
-    // local hall state variables for polling
+    // local hall state variables for polling readings
     bool hall_a = false;
     bool hall_b = false;
     bool hall_c = false;
@@ -194,22 +258,22 @@ static void prvMotorTask( void *pvParameters )
     for (;;)
     {
 
-        if(duty_value>=pwm_period){
+        if(duty_value >= MOTOR_PWM_PERIOD){
             Motor_Stop();
             UARTprintf("Motor Stopped\r\n");
             vTaskDelay(pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
             continue;
         }
 
-        // log hall sensor state
-        if(g_hallStateChanged){
-            g_hallStateChanged = false;
-            prvLogHallState("Edge", g_hallAState, g_hallBState, g_hallCState);
-        }
+        // // log hall sensor state
+        // if(g_hallStateChanged){
+        //     g_hallStateChanged = false;
+        //     prvLogHallState("Edge", g_hallAState, g_hallBState, g_hallCState);
+        // }
 
         setDuty(duty_value);
         prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-        prvLogHallState("Poll", hall_a, hall_b, hall_c);
+        // prvLogHallState("Poll", hall_a, hall_b, hall_c);
 
         vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
         prvUpdateMeasuredMotorSpeed(SPEED_SAMPLE_MS, &last_edge_count);
