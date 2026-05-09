@@ -2,6 +2,7 @@
 #define MOTOR_TASKS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Motor control task header file. */
 void vCreateMotorTasks(void);
@@ -14,7 +15,7 @@ void Motor_Stop(void);
 void Motor_SetSpeed(int rpm);
 
 void Motor_EStop(void);
-//Motor_GetSpeed(void);
+uint32_t Motor_GetSpeed(void);
 //Motor_GetState(void);
 
 #endif /* MOTOR_TASKS_H */
