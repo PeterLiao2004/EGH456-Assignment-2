@@ -39,10 +39,10 @@ void Motor_Init(void);
 void Motor_Start(void);
 void Motor_Stop(void);
 
-void Motor_SetSpeed(int rpm);
-
-void Motor_EStop(void);
 uint32_t Motor_GetSpeed(void);
+//void Motor_SetSpeed(int rpm);
+
+//void Motor_EStop(void);
 //Motor_GetState(void);
 
 /*-----------------------------------------------------------*/
@@ -89,16 +89,14 @@ static volatile bool g_hallStateChanged;
 //---------Motor control varialbes--------
 // Motor PWS period (in microseconds)
 #define MOTOR_PWM_PERIOD 50U
+// Speed sensing variables
+#define SPEED_SAMPLE_MS 250U
+#define HALL_EDGES_PER_MECH_REV 24U
 
 // Motor state variables
 static volatile bool g_motorInitialised = false;
 static volatile bool g_motorRunning = false;
 static volatile uint16_t g_motorDuty = 0;
-
-// Speed sensing variables
-#define SPEED_SAMPLE_MS 250U
-#define HALL_EDGES_PER_MECH_REV 24U
-
 static volatile uint32_t g_motorRpm = 0;
 
 
