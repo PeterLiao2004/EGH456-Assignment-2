@@ -12,7 +12,7 @@ void Motor_Init(void);
 void Motor_Start(void);
 void Motor_Stop(void);
 
-void Motor_SetSpeed(int rpm);
+void Motor_SetSpeed(uint32_t rpm);
 
 void Motor_EStop(void);
 uint32_t Motor_GetSpeed(void);

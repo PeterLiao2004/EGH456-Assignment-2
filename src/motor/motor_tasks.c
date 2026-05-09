@@ -40,7 +40,7 @@ void Motor_Start(void);
 void Motor_Stop(void);
 
 uint32_t Motor_GetSpeed(void);
-//void Motor_SetSpeed(int rpm);
+void Motor_SetSpeed(uint32_t rpm);
 
 //void Motor_EStop(void);
 //Motor_GetState(void);
@@ -90,7 +90,7 @@ static volatile bool g_hallStateChanged;
 // Motor PWS period (in microseconds)
 #define MOTOR_PWM_PERIOD 50U
 // Speed sensing variables
-#define SPEED_SAMPLE_MS 250U
+#define SPEED_SAMPLE_MS 10U
 #define HALL_EDGES_PER_MECH_REV 24U
 
 // Motor state variables
@@ -99,10 +99,13 @@ static volatile bool g_motorRunning = false;
 static volatile uint16_t g_motorDuty = 0;
 static volatile uint32_t g_motorRpm = 0;
 
-#define CONTROL_PERIOD_MS       10U
+// Ramp control limits
+#define CONTROL_PERIOD_MS       SPEED_SAMPLE_MS
 #define ACCEL_LIMIT_RPM_PER_S   500U
 #define DECEL_LIMIT_RPM_PER_S   500U
 
+static uint32_t g_desiredRpm = 0U;    // user-requested RPM
+static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
@@ -227,13 +230,49 @@ static uint32_t prvRpmToDuty(uint32_t rpm)
     }
 }
 
+// Ramp Control: update reference RPM to desired RPM at fixed acceleration/deceleration limits.
+static void prvUpdateSpeedRamp(void)
+{
+    uint32_t step;
+
+    if (g_referenceRpm < g_desiredRpm)
+    {
+        // Accelerating
+        step = (ACCEL_LIMIT_RPM_PER_S * CONTROL_PERIOD_MS) / 1000U;
+
+        g_referenceRpm += step;
+
+        if (g_referenceRpm > g_desiredRpm)
+        {
+            g_referenceRpm = g_desiredRpm;
+        }
+    }
+    else if (g_referenceRpm > g_desiredRpm)
+    {
+        // Decelerating
+        step = (DECEL_LIMIT_RPM_PER_S * CONTROL_PERIOD_MS) / 1000U;
+
+        if (g_referenceRpm > step)
+        {
+            g_referenceRpm -= step;
+        }
+        else
+        {
+            g_referenceRpm = 0U;
+        }
+
+        if (g_referenceRpm < g_desiredRpm)
+        {
+            g_referenceRpm = g_desiredRpm;
+        }
+    }
+}
+
 //---------------------------Motor Task---------------------------//
 /* Motor control task implementation. */
 static void prvMotorTask( void *pvParameters )
 {
-    uint16_t duty_value = 7; // >10% to get it to start, duty cycle in microseconds
-
-    // local hall state variables for polling readings
+    // DEBUG: local hall state variables for polling readings
     bool hall_a = false;
     bool hall_b = false;
     bool hall_c = false;
@@ -249,8 +288,8 @@ static void prvMotorTask( void *pvParameters )
 
     Motor_Start();
 
-    prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-    prvLogHallState("Initial", hall_a, hall_b, hall_c);
+    // Temporary test target speed
+    Motor_SetSpeed(2000U);
 
     last_wake_time = xTaskGetTickCount();
 
@@ -258,28 +297,21 @@ static void prvMotorTask( void *pvParameters )
     for (;;)
     {
 
-        if(duty_value >= MOTOR_PWM_PERIOD){
-            Motor_Stop();
-            UARTprintf("Motor Stopped\r\n");
-            vTaskDelay(pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
-            continue;
-        }
-
-        // // log hall sensor state
-        // if(g_hallStateChanged){
-        //     g_hallStateChanged = false;
-        //     prvLogHallState("Edge", g_hallAState, g_hallBState, g_hallCState);
-        // }
-
-        setDuty(duty_value);
-        prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-        // prvLogHallState("Poll", hall_a, hall_b, hall_c);
-
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
         prvUpdateMeasuredMotorSpeed(SPEED_SAMPLE_MS, &last_edge_count);
-        UARTprintf("Motor speed = %u rpm\r\n", (unsigned int)g_motorRpm);
 
-        duty_value++;
+        prvUpdateSpeedRamp();
+
+        uint32_t duty_us = prvRpmToDuty(g_referenceRpm);
+
+        setDuty(duty_us);
+
+        UARTprintf("Desired=%u, Ref=%u, Actual=%u, Duty=%u\r\n",
+                   (unsigned int)g_desiredRpm,
+                   (unsigned int)g_referenceRpm,
+                   (unsigned int)g_motorRpm,
+                   (unsigned int)duty_us);
+
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( CONTROL_PERIOD_MS  ));
 
     }
 }
@@ -381,3 +413,30 @@ uint32_t Motor_GetSpeed(void)
 
     return rpm;
 }
+
+void Motor_SetSpeed(uint32_t rpm)
+{
+    g_desiredRpm = rpm;
+}
+
+
+//-----------------------Code Graveyard, ignore-----------------------//
+// // log hall sensor state
+// if(g_hallStateChanged){
+//     g_hallStateChanged = false;
+//     prvLogHallState("Edge", g_hallAState, g_hallBState, g_hallCState);
+// }
+
+//prvReadHallSensors(&hall_a, &hall_b, &hall_c);
+// prvLogHallState("Poll", hall_a, hall_b, hall_c);
+
+
+// if(duty_value >= MOTOR_PWM_PERIOD){
+//     Motor_Stop();
+//     UARTprintf("Motor Stopped\r\n");
+//     vTaskDelay(pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
+//     continue;
+// }
+
+// prvReadHallSensors(&hall_a, &hall_b, &hall_c);
+// prvLogHallState("Initial", hall_a, hall_b, hall_c);
