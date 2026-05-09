@@ -42,7 +42,7 @@ void Motor_Stop(void);
 void Motor_SetSpeed(int rpm);
 
 void Motor_EStop(void);
-//Motor_GetSpeed(void);
+uint32_t Motor_GetSpeed(void);
 //Motor_GetState(void);
 
 /*-----------------------------------------------------------*/
@@ -51,6 +51,7 @@ static void prvMotorTask( void *pvParameters );
 static void prvKickStartMotor( void );
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c );
 static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c );
+static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count );
 
 /*-----------------------------------------------------------*/
 /* Motor control task. */
@@ -94,6 +95,13 @@ static volatile bool g_motorInitialised = false;
 static volatile bool g_motorRunning = false;
 static volatile uint16_t g_motorDuty = 0;
 
+// Speed sensing variables
+#define SPEED_SAMPLE_MS 250U
+#define HALL_EDGES_PER_MECH_REV 24U
+
+static volatile uint32_t g_motorRpm = 0;
+
+
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c )
@@ -111,6 +119,33 @@ static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hal
                hall_b ? 1 : 0,
                hall_c ? 1 : 0,
                (unsigned int)g_hallEdgeCount);
+}
+
+/*  Convert Hall edge counts over a fixed sample period into mechanical RPM. 
+    sample_ms: Sample period in milliseconds 
+    last_edge_count: Pointer to the last edge count
+    */ 
+static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count )
+{
+    uint32_t edge_count;
+    uint32_t delta_edges;
+
+    taskENTER_CRITICAL();
+    edge_count = g_hallEdgeCount;
+    taskEXIT_CRITICAL();
+
+    // Get number of edges since last sample, update last edge count
+    delta_edges = edge_count - *last_edge_count;
+    *last_edge_count = edge_count;
+
+    if ((sample_ms == 0U) || (HALL_EDGES_PER_MECH_REV == 0U))
+    {
+        g_motorRpm = 0U;
+        return;
+    }
+    // Calculate RPM: (edges per minute) / (edges per mech rev)
+    g_motorRpm = (delta_edges * 60000U) /
+                 (HALL_EDGES_PER_MECH_REV * sample_ms);
 }
 
 // Kick start the motor by reading the hall sensor state and update motor
@@ -141,6 +176,10 @@ static void prvMotorTask( void *pvParameters )
     bool hall_b = false;
     bool hall_c = false;
 
+    // Variables for speed sensing.
+    uint32_t last_edge_count = 0;
+    TickType_t last_wake_time;
+
     ( void ) pvParameters;
 
     /* Initialise the motors and set the duty cycle (speed) in microseconds */
@@ -148,8 +187,10 @@ static void prvMotorTask( void *pvParameters )
 
     Motor_Start();
 
-    //prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-    //prvLogHallState("Initial", hall_a, hall_b, hall_c);
+    prvReadHallSensors(&hall_a, &hall_b, &hall_c);
+    prvLogHallState("Initial", hall_a, hall_b, hall_c);
+
+    last_wake_time = xTaskGetTickCount();
 
     /* Motor test - ramp up the duty cycle from 10% to 100%, than stop the motor */
     for (;;)
@@ -158,6 +199,7 @@ static void prvMotorTask( void *pvParameters )
         if(duty_value>=pwm_period){
             Motor_Stop();
             UARTprintf("Motor Stopped\r\n");
+            vTaskDelay(pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
             continue;
         }
 
@@ -170,7 +212,11 @@ static void prvMotorTask( void *pvParameters )
         setDuty(duty_value);
         prvReadHallSensors(&hall_a, &hall_b, &hall_c);
         prvLogHallState("Poll", hall_a, hall_b, hall_c);
-        vTaskDelay(pdMS_TO_TICKS( 250 ));
+
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
+        prvUpdateMeasuredMotorSpeed(SPEED_SAMPLE_MS, &last_edge_count);
+        UARTprintf("Motor speed = %u rpm\r\n", (unsigned int)g_motorRpm);
+
         duty_value++;
 
     }
@@ -223,6 +269,7 @@ void Motor_Init(void)
 
     g_hallEdgeCount = 0;
     g_hallStateChanged = false;
+    g_motorRpm = 0U;
 
     g_motorInitialised = true;
 }
@@ -258,4 +305,17 @@ void Motor_Stop(void)
 
     g_motorDuty = 0;
     g_motorRunning = false;
+    g_motorRpm = 0U;
+}
+
+// Return the most recent measured motor speed in RPM.
+uint32_t Motor_GetSpeed(void)
+{
+    uint32_t rpm;
+
+    taskENTER_CRITICAL();
+    rpm = g_motorRpm;
+    taskEXIT_CRITICAL();
+
+    return rpm;
 }
