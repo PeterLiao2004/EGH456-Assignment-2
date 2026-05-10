@@ -90,7 +90,7 @@ static volatile bool g_hallStateChanged;
 // Motor PWS period (in microseconds)
 #define MOTOR_PWM_PERIOD 50U
 // Speed sensing variables
-#define SPEED_SAMPLE_MS 100U
+#define SPEED_SAMPLE_MS 250U
 #define HALL_EDGES_PER_MECH_REV 24U
 
 // Motor state variables
@@ -100,7 +100,7 @@ static volatile uint16_t g_motorDuty = 0;
 static volatile uint32_t g_motorRpm = 0;
 
 // Ramp control limits
-#define MOTOR_CONTROL_PERIOD_MS            100U
+#define MOTOR_CONTROL_PERIOD_MS 5U
 #define ACCEL_LIMIT_RPM_PER_S   500U
 #define DECEL_LIMIT_RPM_PER_S   500U
 
@@ -237,7 +237,7 @@ static void prvUpdateSpeedRamp(void)
 
     if (g_referenceRpm < g_desiredRpm)
     {
-        // Accelerating
+        // Accelerating: (acceleration limit in RPM/s) * (control period in s) = max RPM change per control update
         step = (ACCEL_LIMIT_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS     ) / 1000U;
 
         g_referenceRpm += step;
@@ -249,7 +249,7 @@ static void prvUpdateSpeedRamp(void)
     }
     else if (g_referenceRpm > g_desiredRpm)
     {
-        // Decelerating
+        // Decelerating: (deceleration limit in RPM/s) * (control period in s) = max RPM change per control update
         step = (DECEL_LIMIT_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS     ) / 1000U;
 
         if (g_referenceRpm > step)
@@ -279,7 +279,9 @@ static void prvMotorTask( void *pvParameters )
 
     // Variables for speed sensing.
     uint32_t last_edge_count = 0;
+    TickType_t last_speed_sample_time;
     TickType_t last_wake_time;
+    TickType_t last_print_time;
 
     ( void ) pvParameters;
 
@@ -289,15 +291,25 @@ static void prvMotorTask( void *pvParameters )
     Motor_Start();
 
     // Temporary test target speed
-    Motor_SetSpeed(1000U);
+    Motor_SetSpeed(2000U);
 
+    // Initialise timing variables for speed sensing and debug printing
     last_wake_time = xTaskGetTickCount();
+    last_speed_sample_time = last_wake_time;
+    last_print_time = last_wake_time;
 
     /* Motor test - ramp up the duty cycle from 10% to 100%, than stop the motor */
     for (;;)
     {
+        TickType_t now = xTaskGetTickCount();
+        uint32_t elapsed_ms = (uint32_t)((now - last_speed_sample_time) * portTICK_PERIOD_MS);
 
-        prvUpdateMeasuredMotorSpeed(SPEED_SAMPLE_MS, &last_edge_count);
+
+        if (elapsed_ms >= SPEED_SAMPLE_MS)
+        {
+            prvUpdateMeasuredMotorSpeed(elapsed_ms, &last_edge_count);
+            last_speed_sample_time = now;
+        }
 
         prvUpdateSpeedRamp();
 
@@ -305,13 +317,22 @@ static void prvMotorTask( void *pvParameters )
 
         setDuty(duty_us);
 
-        UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u\r\n",
-                   (unsigned int)g_desiredRpm,
-                   (unsigned int)g_referenceRpm,
-                   (unsigned int)g_motorRpm,
-                   (unsigned int)duty_us);
+        // DEBUG: log the current state every 250ms
+        uint32_t print_elapsed_ms =
+            (uint32_t)((now - last_print_time) * portTICK_PERIOD_MS);
 
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( SPEED_SAMPLE_MS  ));
+        if (print_elapsed_ms >= 250U)
+        {
+            last_print_time = now;
+
+            UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u\r\n",
+                       (unsigned int)g_desiredRpm,
+                       (unsigned int)g_referenceRpm,
+                       (unsigned int)g_motorRpm,
+                       (unsigned int)duty_us);
+        }
+
+        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( MOTOR_CONTROL_PERIOD_MS  ));
 
     }
 }
