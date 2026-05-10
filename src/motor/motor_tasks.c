@@ -90,7 +90,7 @@ static volatile bool g_hallStateChanged;
 // Motor PWS period (in microseconds)
 #define MOTOR_PWM_PERIOD 50U
 // Speed sensing variables
-#define SPEED_SAMPLE_MS 250U
+#define SPEED_SAMPLE_MS 50U
 #define HALL_EDGES_PER_MECH_REV 24U
 
 // DEBUG: print period for current state over UART
@@ -151,9 +151,12 @@ static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge
         g_motorRpm = 0U;
         return;
     }
-    // Calculate RPM: (edges per minute) / (edges per mech rev)
-    g_motorRpm = (delta_edges * 60000U) /
-                 (HALL_EDGES_PER_MECH_REV * sample_ms);
+    // Calculate raw RPM from edge count over sample period 
+    uint32_t raw_rpm;
+    raw_rpm = (delta_edges * (60000U / HALL_EDGES_PER_MECH_REV)) / sample_ms;
+    
+    // filtered RPM = 75% old value + 25% new value
+    g_motorRpm = ((3U * g_motorRpm) + raw_rpm) / 4U;
 }
 
 // Kick start the motor by reading the hall sensor state and update motor
@@ -294,7 +297,7 @@ static void prvMotorTask( void *pvParameters )
     Motor_Start();
 
     // Temporary test target speed
-    Motor_SetSpeed(1000U);
+    Motor_SetSpeed(1500U);
 
     // Initialise timing variables for speed sensing and debug printing
     last_wake_time = xTaskGetTickCount();
