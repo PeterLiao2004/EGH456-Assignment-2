@@ -332,29 +332,55 @@ static int32_t prvClampInt32(int32_t value, int32_t min_value, int32_t max_value
     }
 }
 
-static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_rpm)
+static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_rpm)
 {
     int32_t error;
     int32_t base_duty;
-    int32_t correction;
+    int32_t p_correction;
+    int32_t i_correction;
     int32_t duty;
+    int32_t integral_candidate;
 
     if (reference_rpm == 0U)
     {
+        g_piIntegral = 0;
         return MOTOR_DUTY_MIN;
     }
 
     // Rough open-loop mapping
     base_duty = (int32_t)prvRpmToDuty(reference_rpm);
 
-    // Closed-loop proportional correction
+    // Error: positive if motor is too slow, negative if motor is too fast
     error = (int32_t)reference_rpm - (int32_t)measured_rpm;
 
-    correction = (PI_KP * error) / PI_SCALE;
+    // Proportional term
+    p_correction = (PI_KP * error) / PI_SCALE;
 
-    duty = correction;
+    // Integral term candidate
+    integral_candidate = g_piIntegral + error;
 
+    integral_candidate = prvClampInt32(
+        integral_candidate,
+        PI_INTEGRAL_MIN,
+        PI_INTEGRAL_MAX
+    );
+
+    i_correction = (PI_KI * integral_candidate) / PI_SCALE;
+
+    // Feedforward + PI correction
+    duty = base_duty + p_correction + i_correction;
+
+    // Clamp final duty
     duty = prvClampInt32(duty, MOTOR_DUTY_MIN, MOTOR_DUTY_MAX);
+
+    // Anti-windup:
+    // Only keep integrating if duty is not saturated,
+    // or if the error would move duty away from saturation.
+    if (!((duty >= (int32_t)MOTOR_DUTY_MAX && error > 0) ||
+          (duty <= (int32_t)MOTOR_DUTY_MIN && error < 0)))
+    {
+        g_piIntegral = integral_candidate;
+    }
 
     return (uint32_t)duty;
 }
@@ -446,7 +472,7 @@ static void prvMotorTask( void *pvParameters )
         measured_rpm = g_motorRpm;
         taskEXIT_CRITICAL();
 
-        uint32_t duty_us = prvUpdatePController(g_referenceRpm, measured_rpm);
+        uint32_t duty_us = prvUpdatePIController(g_referenceRpm, measured_rpm);
 
         setDuty(duty_us);
         g_motorDuty = duty_us;
@@ -458,11 +484,12 @@ static void prvMotorTask( void *pvParameters )
         {
             last_print_time = now;
 
-            UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u\r\n",
-                       (unsigned int)g_desiredRpm,
-                       (unsigned int)g_referenceRpm,
-                       (unsigned int)measured_rpm,
-                       (unsigned int)duty_us);
+            UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u, I=%d\r\n",
+                (unsigned int)g_desiredRpm,
+                (unsigned int)g_referenceRpm,
+                (unsigned int)g_motorRpm,
+                (unsigned int)duty_us,
+                (int)g_piIntegral);
         }
 
         // Sleep until the next control update period
