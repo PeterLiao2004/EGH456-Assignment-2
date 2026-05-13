@@ -12,6 +12,7 @@
 #include "utils/uartstdio.h"
 
 #include "control_tasks.h"
+#include "control_state.h"
 
 static void prvControlTask(void *pvParameters);
 
