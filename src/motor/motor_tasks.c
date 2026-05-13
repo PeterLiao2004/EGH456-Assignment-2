@@ -53,7 +53,8 @@ static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c );
 static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c );
 static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count );
 static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index );
-
+static void prvUpdateSpeedRamp(void);
+static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_rpm);
 /*-----------------------------------------------------------*/
 /* Motor control task. */
 static void prvMotorTask(void *pvParameters);
@@ -144,7 +145,7 @@ static const uint32_t g_motorSpeedTestTargets[] =
     3000U,
     2000U,
     1000U,
-    0U
+    1U
 };
 
 #define MOTOR_SPEED_TEST_TARGET_COUNT \
@@ -335,7 +336,7 @@ static int32_t prvClampInt32(int32_t value, int32_t min_value, int32_t max_value
 static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_rpm)
 {
     int32_t error;
-    int32_t base_duty;
+    //int32_t base_duty;
     int32_t p_correction;
     int32_t i_correction;
     int32_t duty;
@@ -344,11 +345,11 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
     if (reference_rpm == 0U)
     {
         g_piIntegral = 0;
-        return MOTOR_DUTY_MIN;
+        return 0U;
     }
 
     // Rough open-loop mapping
-    base_duty = (int32_t)prvRpmToDuty(reference_rpm);
+    //base_duty = (int32_t)prvRpmToDuty(reference_rpm);
 
     // Error: positive if motor is too slow, negative if motor is too fast
     error = (int32_t)reference_rpm - (int32_t)measured_rpm;
@@ -414,11 +415,6 @@ static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint
 /* Motor control task implementation. */
 static void prvMotorTask( void *pvParameters )
 {
-    // DEBUG: local hall state variables for polling readings
-    bool hall_a = false;
-    bool hall_b = false;
-    bool hall_c = false;
-
     // Variables for speed sensing.
     uint32_t last_edge_count = 0;
     TickType_t last_speed_sample_time;
