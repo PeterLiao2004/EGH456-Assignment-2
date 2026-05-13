@@ -94,7 +94,7 @@ static void prvConfigureUART(void)
     GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
 
     /* Initialize the UART for console I/O. */
-    UARTStdioConfig(0, 9600, 16000000);
+    UARTStdioConfig(0, 115200, 16000000);
 }
 /*-----------------------------------------------------------*/
 //  Hall sensor inputs from BoosterPack 1:
