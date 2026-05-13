@@ -110,6 +110,16 @@ static volatile uint32_t g_motorRpm = 0;
 static uint32_t g_desiredRpm = 0U;    // user-requested RPM
 static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
+// Proportinal control
+#define MOTOR_DUTY_MIN        0U
+#define MOTOR_DUTY_MAX        49U
+
+// Fixed-point scaling for proportional gain
+#define P_SCALE               1000L
+
+// Start small. This means Kp = 0.002 duty per RPM error
+#define P_KP                  31L
+
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c )
@@ -274,6 +284,49 @@ static void prvUpdateSpeedRamp(void)
     }
 }
 
+static int32_t prvClampInt32(int32_t value, int32_t min_value, int32_t max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+    else if (value > max_value)
+    {
+        return max_value;
+    }
+    else
+    {
+        return value;
+    }
+}
+
+static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_rpm)
+{
+    int32_t error;
+    int32_t base_duty;
+    int32_t correction;
+    int32_t duty;
+
+    if (reference_rpm == 0U)
+    {
+        return 0U;
+    }
+
+    // Rough open-loop mapping
+    base_duty = (int32_t)prvRpmToDuty(reference_rpm);
+
+    // Closed-loop proportional correction
+    error = (int32_t)reference_rpm - (int32_t)measured_rpm;
+
+    correction = (P_KP * error) / P_SCALE;
+
+    duty = base_duty + correction;
+
+    duty = prvClampInt32(duty, MOTOR_DUTY_MIN, MOTOR_DUTY_MAX);
+
+    return (uint32_t)duty;
+}
+
 //---------------------------Motor Task---------------------------//
 /* Motor control task implementation. */
 static void prvMotorTask( void *pvParameters )
@@ -297,7 +350,7 @@ static void prvMotorTask( void *pvParameters )
     Motor_Start();
 
     // Temporary test target speed
-    Motor_SetSpeed(1500U);
+    Motor_SetSpeed(1700U);
 
     // Initialise timing variables for speed sensing and debug printing
     last_wake_time = xTaskGetTickCount();
@@ -320,9 +373,16 @@ static void prvMotorTask( void *pvParameters )
         // Update the reference RPM towards the desired RPM at fixed acceleration/deceleration limits
         prvUpdateSpeedRamp();
 
-        uint32_t duty_us = prvRpmToDuty(g_referenceRpm);
+        uint32_t measured_rpm;
+
+        taskENTER_CRITICAL();
+        measured_rpm = g_motorRpm;
+        taskEXIT_CRITICAL();
+
+        uint32_t duty_us = prvUpdatePController(g_referenceRpm, measured_rpm);
 
         setDuty(duty_us);
+        g_motorDuty = duty_us;
 
         // DEBUG: log the current state every 250ms
         uint32_t print_elapsed_ms =
