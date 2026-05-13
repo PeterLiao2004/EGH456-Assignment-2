@@ -1,5 +1,8 @@
-#ifndef CONTROL_STATES_H
-#define CONTROL_STATES_H
+#ifndef CONTROL_STATE_H
+#define CONTROL_STATE_H
+
+#include <stdbool.h>
+#include <stdint.h>
 
 typedef enum
 {
@@ -23,5 +26,7 @@ typedef struct
     bool bFaultActive;
 } ControlContext_t;
 
+void Control_Init(ControlContext_t *pxControl);
+void Control_Update(ControlContext_t *pxControl);
 
-#endif /* CONTROL_STATES_H */
+#endif /* CONTROL_STATE_H */
