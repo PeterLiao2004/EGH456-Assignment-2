@@ -116,10 +116,18 @@ static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty ma
 #define MOTOR_DUTY_MAX        49U
 
 // Fixed-point scaling for proportional gain
-#define P_SCALE               1000L
+#define PI_SCALE               1000L
 
-// Kp = P_KP / P_SCALE duty per RPM error.
-#define P_KP                  20L
+// Kp = PI_KP / PI_SCALE duty per RPM error.
+#define PI_KP                  20L
+
+// Ki = PI_KI / PI_SCALE duty per RPM integral.
+#define PI_KI                 1L
+
+#define PI_INTEGRAL_MIN       (-20000L)
+#define PI_INTEGRAL_MAX       (20000L)
+
+static int32_t g_piIntegral = 0;
 
 //-----------------------Motor test sequence -------------------------//
 // Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
@@ -342,7 +350,7 @@ static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_r
     // Closed-loop proportional correction
     error = (int32_t)reference_rpm - (int32_t)measured_rpm;
 
-    correction = (P_KP * error) / P_SCALE;
+    correction = (PI_KP * error) / PI_SCALE;
 
     duty = correction;
 
