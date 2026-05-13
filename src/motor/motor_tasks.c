@@ -112,15 +112,16 @@ static uint32_t g_desiredRpm = 0U;    // user-requested RPM
 static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
 // Proportional control
-#define MOTOR_DUTY_MIN        5U
+#define MOTOR_DUTY_MIN        2U
 #define MOTOR_DUTY_MAX        49U
 
 // Fixed-point scaling for proportional gain
 #define P_SCALE               1000L
 
 // Kp = P_KP / P_SCALE duty per RPM error.
-#define P_KP                  31L
+#define P_KP                  20L
 
+//-----------------------Motor test sequence -------------------------//
 // Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
 #define MOTOR_SPEED_TEST_ENABLED 1U
 #define MOTOR_SPEED_TEST_HOLD_MS 5000U
@@ -140,6 +141,8 @@ static const uint32_t g_motorSpeedTestTargets[] =
 
 #define MOTOR_SPEED_TEST_TARGET_COUNT \
     (sizeof(g_motorSpeedTestTargets) / sizeof(g_motorSpeedTestTargets[0]))
+
+//----------------------------------------------------------------------
 
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
@@ -263,7 +266,7 @@ static uint32_t prvRpmToDuty(uint32_t rpm)
     }
     else
     {
-        return 49U;    // ~6390 rpm max tested
+        return MOTOR_DUTY_MAX;    // ~6390 rpm max tested
     }
 }
 
@@ -330,7 +333,7 @@ static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_r
 
     if (reference_rpm == 0U)
     {
-        return 0U;
+        return MOTOR_DUTY_MIN;
     }
 
     // Rough open-loop mapping
@@ -341,13 +344,14 @@ static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_r
 
     correction = (P_KP * error) / P_SCALE;
 
-    duty = base_duty + correction;
+    duty = correction;
 
     duty = prvClampInt32(duty, MOTOR_DUTY_MIN, MOTOR_DUTY_MAX);
 
     return (uint32_t)duty;
 }
 
+// Update the target speed in the test sequence at fixed time intervals
 static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index )
 {
 #if (MOTOR_SPEED_TEST_ENABLED != 0U)
@@ -434,7 +438,7 @@ static void prvMotorTask( void *pvParameters )
         measured_rpm = g_motorRpm;
         taskEXIT_CRITICAL();
 
-        uint32_t duty_us = prvRpmToDuty(g_referenceRpm);
+        uint32_t duty_us = prvUpdatePController(g_referenceRpm, measured_rpm);
 
         setDuty(duty_us);
         g_motorDuty = duty_us;
