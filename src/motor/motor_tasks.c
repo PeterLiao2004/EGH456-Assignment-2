@@ -119,7 +119,7 @@ static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty ma
 #define PI_SCALE               1000L
 
 // Kp = PI_KP / PI_SCALE duty per RPM error.
-#define PI_KP                  20L
+#define PI_KP                  30L
 
 // Ki = PI_KI / PI_SCALE duty per RPM integral.
 #define PI_KI                 1L
@@ -368,7 +368,7 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
     i_correction = (PI_KI * integral_candidate) / PI_SCALE;
 
     // Feedforward + PI correction
-    duty = base_duty + p_correction + i_correction;
+    duty = p_correction + i_correction;
 
     // Clamp final duty
     duty = prvClampInt32(duty, MOTOR_DUTY_MIN, MOTOR_DUTY_MAX);
