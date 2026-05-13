@@ -52,6 +52,7 @@ static void prvKickStartMotor( void );
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c );
 static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c );
 static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count );
+static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index );
 
 /*-----------------------------------------------------------*/
 /* Motor control task. */
@@ -110,15 +111,38 @@ static volatile uint32_t g_motorRpm = 0;
 static uint32_t g_desiredRpm = 0U;    // user-requested RPM
 static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
-// Proportinal control
-#define MOTOR_DUTY_MIN        0U
+// Proportional control
+#define MOTOR_DUTY_MIN        2U
 #define MOTOR_DUTY_MAX        49U
 
 // Fixed-point scaling for proportional gain
 #define P_SCALE               1000L
 
-// Start small. This means Kp = 0.002 duty per RPM error
-#define P_KP                  31L
+// Kp = P_KP / P_SCALE duty per RPM error.
+#define P_KP                  20L
+
+//-----------------------Motor test sequence -------------------------//
+// Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
+#define MOTOR_SPEED_TEST_ENABLED 1U
+#define MOTOR_SPEED_TEST_HOLD_MS 5000U
+
+static const uint32_t g_motorSpeedTestTargets[] =
+{
+    600U,
+    1000U,
+    1500U,
+    2000U,
+    2500U,
+    3000U,
+    2000U,
+    1000U,
+    0U
+};
+
+#define MOTOR_SPEED_TEST_TARGET_COUNT \
+    (sizeof(g_motorSpeedTestTargets) / sizeof(g_motorSpeedTestTargets[0]))
+
+//----------------------------------------------------------------------
 
 //--------------------Private Motor functions--------------------//
 // Read the current state of the hall effect sensors and return as bools
@@ -190,7 +214,7 @@ static uint32_t prvRpmToDuty(uint32_t rpm)
 {
     if (rpm == 0U)
     {
-        return 0U;
+        return MOTOR_DUTY_MIN;
     }
     else if (rpm <= 600U)
     {
@@ -242,7 +266,7 @@ static uint32_t prvRpmToDuty(uint32_t rpm)
     }
     else
     {
-        return 49U;    // ~6390 rpm max tested
+        return MOTOR_DUTY_MAX;    // ~6390 rpm max tested
     }
 }
 
@@ -309,7 +333,7 @@ static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_r
 
     if (reference_rpm == 0U)
     {
-        return 0U;
+        return MOTOR_DUTY_MIN;
     }
 
     // Rough open-loop mapping
@@ -320,11 +344,36 @@ static uint32_t prvUpdatePController(uint32_t reference_rpm, uint32_t measured_r
 
     correction = (P_KP * error) / P_SCALE;
 
-    duty = base_duty + correction;
+    duty = correction;
 
     duty = prvClampInt32(duty, MOTOR_DUTY_MIN, MOTOR_DUTY_MAX);
 
     return (uint32_t)duty;
+}
+
+// Update the target speed in the test sequence at fixed time intervals
+static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index )
+{
+#if (MOTOR_SPEED_TEST_ENABLED != 0U)
+    uint32_t elapsed_ms;
+
+    elapsed_ms = (uint32_t)((now - *last_step_time) * portTICK_PERIOD_MS);
+
+    if (elapsed_ms >= MOTOR_SPEED_TEST_HOLD_MS)
+    {
+        *last_step_time = now;
+        *target_index = (*target_index + 1U) % MOTOR_SPEED_TEST_TARGET_COUNT;
+
+        Motor_SetSpeed(g_motorSpeedTestTargets[*target_index]);
+
+        UARTprintf("Speed test target changed to %u RPM\r\n",
+                   (unsigned int)g_motorSpeedTestTargets[*target_index]);
+    }
+#else
+    (void)now;
+    (void)last_step_time;
+    (void)target_index;
+#endif
 }
 
 //---------------------------Motor Task---------------------------//
@@ -341,6 +390,8 @@ static void prvMotorTask( void *pvParameters )
     TickType_t last_speed_sample_time;
     TickType_t last_wake_time;
     TickType_t last_print_time;
+    TickType_t last_test_step_time;
+    uint32_t speed_test_index = 0U;
 
     ( void ) pvParameters;
 
@@ -349,13 +400,19 @@ static void prvMotorTask( void *pvParameters )
     // Kickstart the motor
     Motor_Start();
 
-    // Temporary test target speed
-    Motor_SetSpeed(1700U);
-
     // Initialise timing variables for speed sensing and debug printing
     last_wake_time = xTaskGetTickCount();
     last_speed_sample_time = last_wake_time;
     last_print_time = last_wake_time;
+    last_test_step_time = last_wake_time;
+
+#if (MOTOR_SPEED_TEST_ENABLED != 0U)
+    Motor_SetSpeed(g_motorSpeedTestTargets[speed_test_index]);
+    UARTprintf("Speed test started at %u RPM\r\n",
+               (unsigned int)g_motorSpeedTestTargets[speed_test_index]);
+#else
+    Motor_SetSpeed(1700U);
+#endif
 
     for (;;)
     {
@@ -370,6 +427,8 @@ static void prvMotorTask( void *pvParameters )
             last_speed_sample_time = now;
         }
 
+        prvUpdateSpeedTest(now, &last_test_step_time, &speed_test_index);
+
         // Update the reference RPM towards the desired RPM at fixed acceleration/deceleration limits
         prvUpdateSpeedRamp();
 
@@ -383,7 +442,6 @@ static void prvMotorTask( void *pvParameters )
 
         setDuty(duty_us);
         g_motorDuty = duty_us;
-
         // DEBUG: log the current state every 250ms
         uint32_t print_elapsed_ms =
             (uint32_t)((now - last_print_time) * portTICK_PERIOD_MS);
@@ -395,7 +453,7 @@ static void prvMotorTask( void *pvParameters )
             UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u\r\n",
                        (unsigned int)g_desiredRpm,
                        (unsigned int)g_referenceRpm,
-                       (unsigned int)g_motorRpm,
+                       (unsigned int)measured_rpm,
                        (unsigned int)duty_us);
         }
 
