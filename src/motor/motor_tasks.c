@@ -129,13 +129,13 @@ static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty ma
 #define PI_SCALE               1000L
 
 // Kp = PI_KP / PI_SCALE duty per RPM error.
-#define PI_KP                  30L
+#define PI_KP                  50L
 
 // Ki = PI_KI / PI_SCALE duty per RPM integral.
 #define PI_KI                 1L
 
-#define PI_INTEGRAL_MIN       (-20000L)
-#define PI_INTEGRAL_MAX       (20000L)
+#define PI_INTEGRAL_MIN       (-50000L)
+#define PI_INTEGRAL_MAX       (50000L)
 
 static int32_t g_piIntegral = 0;
 
@@ -176,9 +176,9 @@ static const MotorSpeedTestStep_t g_motorSpeedTestSteps[] =
 {
     { MOTOR_TEST_ACTION_START,        400U,  10000U },
     { MOTOR_TEST_ACTION_SET_SPEED,   3000U,  10000U },
-    { MOTOR_TEST_ACTION_STOP,           0U,   20000U },
-    { MOTOR_TEST_ACTION_START,        400U,  10000U },
-    { MOTOR_TEST_ACTION_SET_SPEED,   3000U,  10000U },
+    { MOTOR_TEST_ACTION_STOP,           0U,   15000U },
+    { MOTOR_TEST_ACTION_START,        3000U,  10000U },
+    { MOTOR_TEST_ACTION_SET_SPEED,   6000U,  10000U },
     { MOTOR_TEST_ACTION_ESTOP,          0U,   8000U },
     { MOTOR_TEST_ACTION_CLEAR_ESTOP,  400U,  10000U },
     { MOTOR_TEST_ACTION_SET_SPEED,   2000U,  10000U }
