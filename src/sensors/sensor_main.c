@@ -116,28 +116,19 @@ int sensor_main(void)
 /*-----------------------------------------------------------*/
 
 static void prvConfigureTimers(void) {
-    /* Timer 1A configs */
+    /* Timer 0A configs - fast 200Hz timer*/
     SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock / 1 -1); // 1Hz timer
+    TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock / 200 -1); // 200Hz timer
 
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
     IntEnable(INT_TIMER0A);
     TimerEnable(TIMER0_BASE, TIMER_A);
 
-    /* Timer 1B configs */
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
-    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_B, g_ui32SysClock / 20 -1); // 20Hz timer
-
-    TimerIntEnable(TIMER0_BASE, TIMER_TIMB_TIMEOUT);
-    IntEnable(INT_TIMER0B);
-    TimerEnable(TIMER0_BASE, TIMER_B);
-
-    /* Timer 2A configs */
+    /* Timer 1A configs - slow 2Hz timer*/
     SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
     TimerConfigure(TIMER1_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER1_BASE, TIMER_A, g_ui32SysClock / 100 -1); // 100Hz timer
+    TimerLoadSet(TIMER1_BASE, TIMER_A, g_ui32SysClock / 2 -1); // 2Hz timer
 
     TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
     IntEnable(INT_TIMER1A);
