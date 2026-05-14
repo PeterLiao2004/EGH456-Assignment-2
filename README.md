@@ -22,12 +22,33 @@ The codebase is currently a FreeRTOS scaffold for team development.
 - `src/main.c` application entry point
 - `src/app_tasks.c` task wiring and ISR helpers
 
-## Team Split
+## Team Allocation
 
-- Motor: hall sensors, commutation, motor feedback
-- Control: state machine, speed control, fault handling
-- Sensors: I2C sensors and sensor data
-- UI: display and touch interaction
+This is a suitable group split because each person gets a clear subsystem folder,
+task scaffold, and assignment responsibility.
+
+| Area | Folder | Main responsibilities | Integration outputs |
+| --- | --- | --- | --- |
+| Motor | `src/motor/` | Hall sensor interrupts, BLDC commutation, motor phase updates, motor speed/current feedback | Motor status, measured speed, fault flags |
+| Control | `src/control/` | Motor state machine, start/stop behaviour, speed target ramping, e-stop and fault handling | Control mode, requested motor speed/duty, system fault state |
+| Sensors | `src/sensors/` | I2C sensor setup, temperature/humidity sensor, time-of-flight distance sensor, sensor data formatting | Latest sensor readings, sensor validity/fault flags |
+| UI | `src/ui/` | LCD display, touch input, user commands, status screens | User commands, displayed state, requested speed/setpoints |
+
+## Integration Boundaries
+
+- `src/app_tasks.c` should only create and wire tasks. Subsystem logic should stay
+  inside the relevant module folder.
+- Motor owns low-level hardware timing for hall transitions and commutation.
+  Control should request behaviour, not directly drive motor phases.
+- Control owns the assignment state machine and decides when start, stop, e-stop,
+  and speed-ramp transitions occur.
+- Sensors owns raw I2C device access and should expose cleaned readings to the
+  rest of the application.
+- UI owns LCD/touch behaviour and should communicate user requests through shared
+  state, queues, or clearly named interface functions.
+- The touchscreen uses ADC0 and Timer1 in the reference material, so avoid
+  reusing those resources for current sensing or other module timers without
+  checking for conflicts.
 
 ## Notes
 
