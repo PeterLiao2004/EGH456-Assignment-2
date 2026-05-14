@@ -15,6 +15,8 @@ void Motor_Stop(void);
 void Motor_SetSpeed(uint32_t rpm);
 
 void Motor_EStop(void);
+void Motor_ClearEStop(void);
+bool Motor_IsFaultLatched(void);
 uint32_t Motor_GetSpeed(void);
 //Motor_GetState(void);
 

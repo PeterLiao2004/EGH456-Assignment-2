@@ -52,7 +52,6 @@ bool Motor_IsFaultLatched(void);
 static void prvMotorTask( void *pvParameters );
 static void prvKickStartMotor( void );
 static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c );
-static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c );
 static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count );
 static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index );
 static void prvUpdateSpeedRamp(void);
@@ -145,6 +144,7 @@ typedef enum
 {
     MOTOR_STATE_STOPPED = 0,
     MOTOR_STATE_RUNNING,
+    MOTOR_STATE_STOPPING,
     MOTOR_STATE_ESTOP_BRAKING,
     MOTOR_STATE_FAULT_LATCHED
 } MotorState_t;
@@ -155,16 +155,37 @@ static volatile bool g_motorEStopRequested = false;
 //-----------------------Motor test sequence -------------------------//
 // Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
 #define MOTOR_SPEED_TEST_ENABLED 1U
-#define MOTOR_SPEED_TEST_HOLD_MS 25000U
 
-static const uint32_t g_motorSpeedTestTargets[] =
+typedef enum
 {
-    5000U,
-    1U
+    MOTOR_TEST_ACTION_START = 0,
+    MOTOR_TEST_ACTION_SET_SPEED,
+    MOTOR_TEST_ACTION_STOP,
+    MOTOR_TEST_ACTION_ESTOP,
+    MOTOR_TEST_ACTION_CLEAR_ESTOP
+} MotorSpeedTestAction_t;
+
+typedef struct
+{
+    MotorSpeedTestAction_t action;
+    uint32_t rpm;
+    uint32_t hold_ms;
+} MotorSpeedTestStep_t;
+
+static const MotorSpeedTestStep_t g_motorSpeedTestSteps[] =
+{
+    { MOTOR_TEST_ACTION_START,        400U,  10000U },
+    { MOTOR_TEST_ACTION_SET_SPEED,   3000U,  10000U },
+    { MOTOR_TEST_ACTION_STOP,           0U,   20000U },
+    { MOTOR_TEST_ACTION_START,        400U,  10000U },
+    { MOTOR_TEST_ACTION_SET_SPEED,   3000U,  10000U },
+    { MOTOR_TEST_ACTION_ESTOP,          0U,   8000U },
+    { MOTOR_TEST_ACTION_CLEAR_ESTOP,  400U,  10000U },
+    { MOTOR_TEST_ACTION_SET_SPEED,   2000U,  10000U }
 };
 
-#define MOTOR_SPEED_TEST_TARGET_COUNT \
-    (sizeof(g_motorSpeedTestTargets) / sizeof(g_motorSpeedTestTargets[0]))
+#define MOTOR_SPEED_TEST_STEP_COUNT \
+    (sizeof(g_motorSpeedTestSteps) / sizeof(g_motorSpeedTestSteps[0]))
 
 //----------------------------------------------------------------------
 
@@ -175,16 +196,6 @@ static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c )
     *hall_a = (GPIOPinRead(HALL_A_PORT, HALL_A_PIN) != 0U);
     *hall_b = (GPIOPinRead(HALL_B_PORT, HALL_B_PIN) != 0U);
     *hall_c = (GPIOPinRead(HALL_C_PORT, HALL_C_PIN) != 0U);
-}
-// Helper: Log current state of Hall sensor via UART
-static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c )
-{
-    UARTprintf("%s Hall state A=%d B=%d C=%d edges=%u\r\n",
-               tag,
-               hall_a ? 1 : 0,
-               hall_b ? 1 : 0,
-               hall_c ? 1 : 0,
-               (unsigned int)g_hallEdgeCount);
 }
 
 /*  Convert Hall edge counts over a fixed sample period into mechanical RPM. 
@@ -340,6 +351,48 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
     return (uint32_t)duty;
 }
 
+static void prvApplySpeedTestStep(uint32_t step_index)
+{
+    const MotorSpeedTestStep_t *step = &g_motorSpeedTestSteps[step_index];
+
+    switch (step->action)
+    {
+        case MOTOR_TEST_ACTION_START:
+            Motor_Start();
+            Motor_SetSpeed(step->rpm);
+            UARTprintf("Speed test: START, target=%u RPM\r\n",
+                       (unsigned int)step->rpm);
+            break;
+
+        case MOTOR_TEST_ACTION_SET_SPEED:
+            Motor_SetSpeed(step->rpm);
+            UARTprintf("Speed test: SET SPEED, target=%u RPM\r\n",
+                       (unsigned int)step->rpm);
+            break;
+
+        case MOTOR_TEST_ACTION_STOP:
+            Motor_Stop();
+            UARTprintf("Speed test: STOP\r\n");
+            break;
+
+        case MOTOR_TEST_ACTION_ESTOP:
+            Motor_EStop();
+            UARTprintf("Speed test: E-STOP\r\n");
+            break;
+
+        case MOTOR_TEST_ACTION_CLEAR_ESTOP:
+            Motor_ClearEStop();
+            Motor_Start();
+            Motor_SetSpeed(step->rpm);
+            UARTprintf("Speed test: CLEAR E-STOP, START, target=%u RPM\r\n",
+                       (unsigned int)step->rpm);
+            break;
+
+        default:
+            break;
+    }
+}
+
 // Estop braking: update reference RPM down to 0 at 1000 RPM/s, then latch fault state until cleared.
 static void prvUpdateEStopBraking(void)
 {
@@ -377,27 +430,25 @@ static void prvUpdateEStopBraking(void)
 }
 
 // Update the target speed in the test sequence at fixed time intervals
-static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index )
+static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *step_index )
 {
 #if (MOTOR_SPEED_TEST_ENABLED != 0U)
     uint32_t elapsed_ms;
+    const MotorSpeedTestStep_t *step = &g_motorSpeedTestSteps[*step_index];
 
     elapsed_ms = (uint32_t)((now - *last_step_time) * portTICK_PERIOD_MS);
 
-    if (elapsed_ms >= MOTOR_SPEED_TEST_HOLD_MS)
+    if (elapsed_ms >= step->hold_ms)
     {
         *last_step_time = now;
-        *target_index = (*target_index + 1U) % MOTOR_SPEED_TEST_TARGET_COUNT;
+        *step_index = (*step_index + 1U) % MOTOR_SPEED_TEST_STEP_COUNT;
 
-        Motor_SetSpeed(g_motorSpeedTestTargets[*target_index]);
-
-        UARTprintf("Speed test target changed to %u RPM\r\n",
-                   (unsigned int)g_motorSpeedTestTargets[*target_index]);
+        prvApplySpeedTestStep(*step_index);
     }
 #else
     (void)now;
     (void)last_step_time;
-    (void)target_index;
+    (void)step_index;
 #endif
 }
 
@@ -428,9 +479,8 @@ static void prvMotorTask( void *pvParameters )
 
     //----------Motor Speed control test-------------------------//
     #if (MOTOR_SPEED_TEST_ENABLED != 0U)
-        Motor_SetSpeed(g_motorSpeedTestTargets[speed_test_index]);
-        UARTprintf("Speed test started at %u RPM\r\n",
-                (unsigned int)g_motorSpeedTestTargets[speed_test_index]);
+        UARTprintf("Speed test started\r\n");
+        prvApplySpeedTestStep(speed_test_index);
     #else
         Motor_SetSpeed(1700U);
     #endif
@@ -476,6 +526,18 @@ static void prvMotorTask( void *pvParameters )
             g_referenceRpm = 0U;
             g_piIntegral = 0;
         }
+        else if (state == MOTOR_STATE_STOPPING)
+        {
+            prvUpdateSpeedRamp();
+            if (g_referenceRpm == 0U)
+            {
+                setDuty(0U);
+                stopMotor(1);
+                g_motorDuty = 0U;
+                g_motorRunning = false;
+                g_motorState = MOTOR_STATE_STOPPED;
+            }
+        }
         else
         {
             prvUpdateSpeedRamp();
@@ -484,14 +546,16 @@ static void prvMotorTask( void *pvParameters )
         // Update duty cycle based on reference RPM and measured RPM using PI controller
         uint32_t duty = prvUpdatePIController(g_referenceRpm, g_motorRpm);
 
-        if (state != MOTOR_STATE_FAULT_LATCHED)
+        if ((state == MOTOR_STATE_RUNNING) ||
+            (state == MOTOR_STATE_STOPPING) ||
+            (state == MOTOR_STATE_ESTOP_BRAKING))
         {
             setDuty(duty);
             g_motorDuty = duty;
         }
         else
         {
-            setDuty(0);
+            setDuty(0U);
             stopMotor(1);
             g_motorDuty = 0U;
         }
@@ -608,17 +672,16 @@ void Motor_Start(void)
 // Stop the motor
 void Motor_Stop(void)
 {
-    if (!g_motorInitialised)
+    taskENTER_CRITICAL();
+
+    if ((g_motorState != MOTOR_STATE_ESTOP_BRAKING) &&
+        (g_motorState != MOTOR_STATE_FAULT_LATCHED))
     {
-        return;
+        g_desiredRpm = 0U;
+        g_motorState = MOTOR_STATE_STOPPING;
     }
 
-    setDuty(0);
-    stopMotor(1);
-
-    g_motorDuty = 0;
-    g_motorRunning = false;
-    g_motorRpm = 0U;
+    taskEXIT_CRITICAL();
 }
 
 // Return the most recent measured motor speed in RPM.
@@ -721,6 +784,17 @@ bool Motor_IsFaultLatched(void)
 // if(g_hallStateChanged){
 //     g_hallStateChanged = false;
 //     prvLogHallState("Edge", g_hallAState, g_hallBState, g_hallCState);
+// }
+
+// // Helper: Log current state of Hall sensor via UART
+// static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c )
+// {
+//     UARTprintf("%s Hall state A=%d B=%d C=%d edges=%u\r\n",
+//                tag,
+//                hall_a ? 1 : 0,
+//                hall_b ? 1 : 0,
+//                hall_c ? 1 : 0,
+//                (unsigned int)g_hallEdgeCount);
 // }
 
 //prvReadHallSensors(&hall_a, &hall_b, &hall_c);
