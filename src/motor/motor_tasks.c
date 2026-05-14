@@ -119,6 +119,10 @@ static volatile uint32_t g_motorRpm = 0;
 static uint32_t g_desiredRpm = 0U;    // user-requested RPM
 static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
+// E-stop
+#define ESTOP_DECEL_RPM_PER_S 1000U
+
+
 //--- Proportional control---//
 // Fixed-point scaling for proportional gain
 #define PI_SCALE               1000L
@@ -133,6 +137,18 @@ static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty ma
 #define PI_INTEGRAL_MAX       (20000L)
 
 static int32_t g_piIntegral = 0;
+
+//--------Motor States--------//
+typedef enum
+{
+    MOTOR_STATE_STOPPED = 0,
+    MOTOR_STATE_RUNNING,
+    MOTOR_STATE_ESTOP_BRAKING,
+    MOTOR_STATE_FAULT_LATCHED
+} MotorState_t;
+
+static volatile MotorState_t g_motorState = MOTOR_STATE_STOPPED;
+static volatile bool g_motorEStopRequested = false;
 
 //-----------------------Motor test sequence -------------------------//
 // Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
@@ -213,67 +229,6 @@ static void prvKickStartMotor( void )
     g_hallCState = hall_c;
     // give the read hall effect sensor lines to updateMotor() to move the motor one single phase
     updateMotor(hall_a, hall_b, hall_c);
-}
-
-// Temporary: Rough mapping of RPM to duty cycle for testing. Replace with a proper control algorithm in the future.
-static uint32_t prvRpmToDuty(uint32_t rpm)
-{
-    if (rpm == 0U)
-    {
-        return MOTOR_DUTY_MIN;
-    }
-    else if (rpm <= 600U)
-    {
-        return 7U;     // ~590 rpm
-    }
-    else if (rpm <= 1000U)
-    {
-        return 9U;     // ~950 rpm
-    }
-    else if (rpm <= 1500U)
-    {
-        return 13U;    // ~1450 rpm
-    }
-    else if (rpm <= 2000U)
-    {
-        return 17U;    // ~2010 rpm
-    }
-    else if (rpm <= 2500U)
-    {
-        return 20U;    // ~2470 rpm
-    }
-    else if (rpm <= 3000U)
-    {
-        return 23U;    // ~2970 rpm
-    }
-    else if (rpm <= 3500U)
-    {
-        return 26U;    // ~3470 rpm
-    }
-    else if (rpm <= 4000U)
-    {
-        return 29U;    // ~3970 rpm
-    }
-    else if (rpm <= 4500U)
-    {
-        return 33U;    // ~4460 rpm
-    }
-    else if (rpm <= 5000U)
-    {
-        return 39U;    // ~5010 rpm
-    }
-    else if (rpm <= 5500U)
-    {
-        return 43U;    // ~5500 rpm
-    }
-    else if (rpm <= 6000U)
-    {
-        return 46U;    // ~5920 rpm
-    }
-    else
-    {
-        return MOTOR_DUTY_MAX;    // ~6390 rpm max tested
-    }
 }
 
 // Ramp Control: update reference RPM to desired RPM at fixed acceleration/deceleration limits.
@@ -433,13 +388,15 @@ static void prvMotorTask( void *pvParameters )
     last_print_time = last_wake_time;
     last_test_step_time = last_wake_time;
 
-#if (MOTOR_SPEED_TEST_ENABLED != 0U)
-    Motor_SetSpeed(g_motorSpeedTestTargets[speed_test_index]);
-    UARTprintf("Speed test started at %u RPM\r\n",
-               (unsigned int)g_motorSpeedTestTargets[speed_test_index]);
-#else
-    Motor_SetSpeed(1700U);
-#endif
+    //----------Motor Speed control test-------------------------//
+    #if (MOTOR_SPEED_TEST_ENABLED != 0U)
+        Motor_SetSpeed(g_motorSpeedTestTargets[speed_test_index]);
+        UARTprintf("Speed test started at %u RPM\r\n",
+                (unsigned int)g_motorSpeedTestTargets[speed_test_index]);
+    #else
+        Motor_SetSpeed(1700U);
+    #endif
+    //------------------------------------------------------------//
 
     for (;;)
     {
@@ -631,3 +588,65 @@ void Motor_SetSpeed(uint32_t rpm)
 
 // prvReadHallSensors(&hall_a, &hall_b, &hall_c);
 // prvLogHallState("Initial", hall_a, hall_b, hall_c);
+
+
+// // Temporary: Rough mapping of RPM to duty cycle for testing. Replace with a proper control algorithm in the future.
+// static uint32_t prvRpmToDuty(uint32_t rpm)
+// {
+//     if (rpm == 0U)
+//     {
+//         return MOTOR_DUTY_MIN;
+//     }
+//     else if (rpm <= 600U)
+//     {
+//         return 7U;     // ~590 rpm
+//     }
+//     else if (rpm <= 1000U)
+//     {
+//         return 9U;     // ~950 rpm
+//     }
+//     else if (rpm <= 1500U)
+//     {
+//         return 13U;    // ~1450 rpm
+//     }
+//     else if (rpm <= 2000U)
+//     {
+//         return 17U;    // ~2010 rpm
+//     }
+//     else if (rpm <= 2500U)
+//     {
+//         return 20U;    // ~2470 rpm
+//     }
+//     else if (rpm <= 3000U)
+//     {
+//         return 23U;    // ~2970 rpm
+//     }
+//     else if (rpm <= 3500U)
+//     {
+//         return 26U;    // ~3470 rpm
+//     }
+//     else if (rpm <= 4000U)
+//     {
+//         return 29U;    // ~3970 rpm
+//     }
+//     else if (rpm <= 4500U)
+//     {
+//         return 33U;    // ~4460 rpm
+//     }
+//     else if (rpm <= 5000U)
+//     {
+//         return 39U;    // ~5010 rpm
+//     }
+//     else if (rpm <= 5500U)
+//     {
+//         return 43U;    // ~5500 rpm
+//     }
+//     else if (rpm <= 6000U)
+//     {
+//         return 46U;    // ~5920 rpm
+//     }
+//     else
+//     {
+//         return MOTOR_DUTY_MAX;    // ~6390 rpm max tested
+//     }
+// }
