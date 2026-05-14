@@ -1,31 +1,4 @@
-
-/******************************************************************************
- *
- * This project provides a simple demonstration on how to control GPIO as both
- * inputs and outputs and how to use a binary semaphore to defer ISR processing
- * to an individual task to keep the ISR processing very light.  The four LEDs
- * on the EK-TM4C1294XL are configured with the standard PinoutSet() function.
- * The buttons are used to control which LED is on.  The default is LED D1.
- * Pressing SW1 moves the lit LED down by one and pressing SW2 moves it up by
- * one.  Both switches will wrap around.
- *
- * main() creates one binary semaphore and one task.  It then starts the
- * scheduler.
- *
- * The binary semaphore is used to keep the LED task in a blocked state until
- * an interrupt fires from a switch input.
- *
- * The LED task configures the buttons, initializes the LEDs, and starts the
- * task which will handle the processing for the input switches to toggle the
- * LEDs.
- *
- * This example uses UARTprintf for output of UART messages.  UARTprintf is not
- * a thread-safe API and is only being used for simplicity of the demonstration
- * and in a controlled manner.
- *
- * Open a terminal with 115,200 8-N-1 to see the output for this demo.
- *
- */
+/* Sensor main function */
 
 /* Standard includes. */
 #include <stdio.h>
@@ -59,21 +32,22 @@
 /*-----------------------------------------------------------*/
 
 /* Global for binary semaphore shared between tasks. */
-SemaphoreHandle_t xSW1Semaphore = NULL;
+SemaphoreHandle_t xFastTimerSemaphore = NULL;
+SemaphoreHandle_t xSlowTimerSemaphore = NULL;
 
-SemaphoreHandle_t xSW2Semaphore = NULL;
 
-SemaphoreHandle_t xTimerSemaphore = NULL;
+// SemaphoreHandle_t xSW1Semaphore = NULL;
 
-SemaphoreHandle_t xUARTMutex = NULL;
+// SemaphoreHandle_t xSW2Semaphore = NULL;
 
-SemaphoreHandle_t xQueueDroppingMutex = NULL;
+// SemaphoreHandle_t xTimerSemaphore = NULL;
+
+// SemaphoreHandle_t xUARTMutex = NULL;
+
+// SemaphoreHandle_t xQueueDroppingMutex = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware(void);
-
-/* create the LED task. */
-extern void vCreateTasks(void);
 
 extern volatile uint32_t g_ui32SysClock;
 /*-----------------------------------------------------------*/
@@ -85,6 +59,9 @@ int sensor_main(void)
 
     /* Create the binary semaphore used to synchronize the button ISR and the
      * button processing task. */
+    xFastTimerSemaphore = xSemaphoreCreateBinary();
+    xSlowTimerSemaphore = xSemaphoreCreateBinary();
+
     // xSW1Semaphore = xSemaphoreCreateBinary();
 
     // xSW2Semaphore = xSemaphoreCreateBinary();

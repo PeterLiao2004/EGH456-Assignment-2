@@ -33,15 +33,18 @@
 /* The system clock frequency. */
 volatile uint32_t g_ui32SysClock;
 
-/* Global semaphores shared between ISRs and tasks. */
-SemaphoreHandle_t xTimerSemaphore = NULL;
-SemaphoreHandle_t xButtonSemaphore = NULL;
+// /* Global semaphores shared between ISRs and tasks. */
+// SemaphoreHandle_t xTimerSemaphore = NULL;
+// SemaphoreHandle_t xButtonSemaphore = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware( void );
 
 /* Function to create the application tasks. */
 extern void vCreateAppTasks( void );
+
+/* Set up sensor configurations. */
+extern void sensor_main(void);
 /*-----------------------------------------------------------*/
 
 int main( void )
@@ -49,19 +52,22 @@ int main( void )
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
 
-    /* Create the binary semaphore used to synchronize the button ISR and the
-     * button processing task. */
-    xTimerSemaphore = xSemaphoreCreateBinary();
-    xButtonSemaphore = xSemaphoreCreateBinary();
+    // /* Create the binary semaphore used to synchronize the button ISR and the
+    //  * button processing task. */
+    // xTimerSemaphore = xSemaphoreCreateBinary();
+    // xButtonSemaphore = xSemaphoreCreateBinary();
 
-    if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
-    {
+    // if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
+    // {
         /* Configure application specific hardware and initialize the tasks. */
         vCreateAppTasks();
 
+        /* Initialize the sensor configurations. */
+        sensor_main();
+
         /* Start the tasks. */
         vTaskStartScheduler();
-    }
+    // }
 
     /* If all is well, the scheduler will now be running, and the following
     line will never be reached.  If the following line does execute, then
