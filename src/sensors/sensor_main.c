@@ -32,12 +32,14 @@
 /*-----------------------------------------------------------*/
 
 /* Global for binary semaphore shared between tasks. */
+SemaphoreHandle_t xUARTMutex = NULL;
 SemaphoreHandle_t xFastTimerSemaphore = NULL;
 SemaphoreHandle_t xSlowTimerSemaphore = NULL;
 
 SemaphoreHandle_t xOpt3001ReadSemaphore = NULL;
 
-SemaphoreHandle_t xOpt3001QueueDropSemaphore = NULL;
+SemaphoreHandle_t xOpt3001QueueDropMutex = NULL;
+
 
 
 // SemaphoreHandle_t xSW1Semaphore = NULL;
@@ -56,52 +58,26 @@ static void prvSetupHardware(void);
 extern volatile uint32_t g_ui32SysClock;
 /*-----------------------------------------------------------*/
 
-int sensor_main(void)
+void sensor_main(void)
 {
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
 
     /* Create the binary semaphore used to synchronize the button ISR and the
      * button processing task. */
+    xUARTMutex = xSemaphoreCreateMutex();
     xFastTimerSemaphore = xSemaphoreCreateBinary();
     xSlowTimerSemaphore = xSemaphoreCreateBinary();
 
     xOpt3001ReadSemaphore = xSemaphoreCreateBinary();
     
-    xOpt3001QueueDropSemaphore = xSemaphoreCreateBinary();
-
-    // xSW1Semaphore = xSemaphoreCreateBinary();
-
-    // xSW2Semaphore = xSemaphoreCreateBinary();
-
-    // xTimerSemaphore = xSemaphoreCreateBinary();
-
-    // xUARTMutex = xSemaphoreCreateMutex();
-
-    // xQueueDroppingMutex = xSemaphoreCreateMutex();
-
-    // if ((xSW1Semaphore != NULL) && (xSW2Semaphore != NULL) && (xTimerSemaphore != NULL) && (xUARTMutex != NULL) && (xQueueDroppingMutex != NULL))
-    // {
-    //     /* Configure application specific hardware and initialize the task thread. */
-    //     vCreateTasks();
-
-    //     /* Start the tasks. */
-    //     vTaskStartScheduler();
-    // }
-
-    /* If all is well, the scheduler will now be running, and the following
-    line will never be reached.  If the following line does execute, then
-    there was insufficient FreeRTOS heap memory available for the idle and/or
-    timer tasks to be created.  See the memory management section on the
-    FreeRTOS web site for more details. */
-    for (;;)
-        ;
+    xOpt3001QueueDropMutex = xSemaphoreCreateMutex();
 }
 
 /*-----------------------------------------------------------*/
 
 static void prvConfigureTimers(void) {
-    /* Timer 0A configs - fast 200Hz timer*/
+    /* Timer 0A configs - fast 300Hz timer*/
     SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
     TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock / 300 -1); // 300Hz timer

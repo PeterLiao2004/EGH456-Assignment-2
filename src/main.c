@@ -59,11 +59,11 @@ int main( void )
 
     // if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
     // {
-        /* Configure application specific hardware and initialize the tasks. */
-        vCreateAppTasks();
-
         /* Initialize the sensor configurations. */
         sensor_main();
+
+        /* Configure application specific hardware and initialize the tasks. */
+        vCreateAppTasks();
 
         /* Start the tasks. */
         vTaskStartScheduler();

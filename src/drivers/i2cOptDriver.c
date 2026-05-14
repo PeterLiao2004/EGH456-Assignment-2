@@ -75,8 +75,8 @@ void i2cOptDriverInit(void)
         I2CTransaction.mutex = xSemaphoreCreateMutex();
     }
 
-    I2CMasterIntEnable(I2C0_BASE);
-    IntEnable(INT_I2C0);
+    I2CMasterIntEnable(I2C2_BASE);
+    IntEnable(INT_I2C2);
 }
 
 // ----------------------- Write -----------------------
@@ -106,9 +106,9 @@ bool writeI2C(uint8_t ui8Addr, uint8_t ui8Reg, uint8_t *data)
     I2CTransaction.state = I2C_WRITE_WAIT_REG;
 
     // Start transaction: send register address first
-    I2CMasterSlaveAddrSet(I2C0_BASE, ui8Addr, false);
-    I2CMasterDataPut(I2C0_BASE, ui8Reg);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_START);
+    I2CMasterSlaveAddrSet(I2C2_BASE, ui8Addr, false);
+    I2CMasterDataPut(I2C2_BASE, ui8Reg);
+    I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_START);
 
     // Wait for ISR to finish transaction
     if (xSemaphoreTake(I2CTransaction.doneSemaphore, pdMS_TO_TICKS(50)) != pdPASS)
@@ -155,9 +155,9 @@ bool readI2C(uint8_t ui8Addr, uint8_t ui8Reg, uint8_t *data)
     I2CTransaction.state = I2C_READ_WAIT_REG;
 
     // Start transaction: write register address first
-    I2CMasterSlaveAddrSet(I2C0_BASE, ui8Addr, false);
-    I2CMasterDataPut(I2C0_BASE, ui8Reg);
-    I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_SINGLE_SEND);
+    I2CMasterSlaveAddrSet(I2C2_BASE, ui8Addr, false);
+    I2CMasterDataPut(I2C2_BASE, ui8Reg);
+    I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_SINGLE_SEND);
 
     // Wait for ISR to finish transaction
     if (xSemaphoreTake(I2CTransaction.doneSemaphore, pdMS_TO_TICKS(50)) != pdPASS)
@@ -177,14 +177,14 @@ bool readI2C(uint8_t ui8Addr, uint8_t ui8Reg, uint8_t *data)
 }
 
 // ----------------------- I2C ISR -----------------------
-void I2C0IntHandler(void)
+void I2C2IntHandler(void)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    I2CMasterIntClear(I2C0_BASE);
+    I2CMasterIntClear(I2C2_BASE);
 
     // Error path
-    if (I2CMasterErr(I2C0_BASE) != I2C_MASTER_ERR_NONE)
+    if (I2CMasterErr(I2C2_BASE) != I2C_MASTER_ERR_NONE)
     {
         I2CTransaction.success = false;
         I2CTransaction.state = I2C_IDLE;
@@ -202,14 +202,14 @@ void I2C0IntHandler(void)
     {
         // ---------- Write transaction ----------
         case I2C_WRITE_WAIT_REG:
-            I2CMasterDataPut(I2C0_BASE, I2CTransaction.data[0]);
-            I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_CONT);
+            I2CMasterDataPut(I2C2_BASE, I2CTransaction.data[0]);
+            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_CONT);
             I2CTransaction.state = I2C_WRITE_WAIT_DATA0;
             break;
 
         case I2C_WRITE_WAIT_DATA0:
-            I2CMasterDataPut(I2C0_BASE, I2CTransaction.data[1]);
-            I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
+            I2CMasterDataPut(I2C2_BASE, I2CTransaction.data[1]);
+            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
             I2CTransaction.state = I2C_WRITE_WAIT_DATA1;
             break;
 
@@ -226,19 +226,19 @@ void I2C0IntHandler(void)
 
         // ---------- Read transaction ----------
         case I2C_READ_WAIT_REG:
-            I2CMasterSlaveAddrSet(I2C0_BASE, I2CTransaction.addr, true);
-            I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
+            I2CMasterSlaveAddrSet(I2C2_BASE, I2CTransaction.addr, true);
+            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
             I2CTransaction.state = I2C_READ_WAIT_BYTE0;
             break;
 
         case I2C_READ_WAIT_BYTE0:
-            I2CTransaction.data[0] = I2CMasterDataGet(I2C0_BASE);
-            I2CMasterControl(I2C0_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
+            I2CTransaction.data[0] = I2CMasterDataGet(I2C2_BASE);
+            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
             I2CTransaction.state = I2C_READ_WAIT_BYTE1;
             break;
 
         case I2C_READ_WAIT_BYTE1:
-            I2CTransaction.data[1] = I2CMasterDataGet(I2C0_BASE);
+            I2CTransaction.data[1] = I2CMasterDataGet(I2C2_BASE);
             I2CTransaction.success = true;
             I2CTransaction.state = I2C_IDLE;
 
