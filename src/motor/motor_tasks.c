@@ -742,9 +742,6 @@ void Motor_EStop(void)
     /* Ignore normal commands by forcing desired RPM to zero. */
     g_desiredRpm = 0U;
 
-    /* Reset PI integral so it does not fight braking. */
-    g_piIntegral = 0;
-
     taskEXIT_CRITICAL();
 }
 
