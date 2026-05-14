@@ -58,7 +58,7 @@ void vCreateAppTasks(void)
     //prvConfigureHWTimer();
 
     /* Create the application tasks. */
-    vCreateMotorTasks();
+    vCreateControlTasks();
     //vCreateControlTasks();
     //vCreateSensorTasks();
     //vCreateUiTasks();
