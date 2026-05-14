@@ -342,6 +342,44 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
     return (uint32_t)duty;
 }
 
+// Estop braking: update reference RPM down to 0 at 1000 RPM/s, then latch fault state until cleared.
+static void prvUpdateEStopBraking(void)
+{
+    uint32_t step;
+
+    step = (ESTOP_DECEL_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS) / 1000U;
+
+    if (step == 0U)
+    {
+        step = 1U;
+    }
+
+    if (g_referenceRpm > step)
+    {
+        g_referenceRpm -= step;
+    }
+    else
+    {
+        g_referenceRpm = 0U;
+    }
+
+    g_desiredRpm = 0U;
+
+    if (g_referenceRpm == 0U)
+    {
+        g_piIntegral = 0;
+        g_motorDuty = 0U;
+
+        setDuty(0);
+        stopMotor(1);
+
+        g_motorRunning = false;
+        g_motorState = MOTOR_STATE_FAULT_LATCHED;
+    }
+}
+
+//-------------------TESTING: Motor Speed Test code --------------------//
+// Apply the current step in the motor speed test sequence 
 static void prvApplySpeedTestStep(uint32_t step_index)
 {
     const MotorSpeedTestStep_t *step = &g_motorSpeedTestSteps[step_index];
@@ -384,42 +422,6 @@ static void prvApplySpeedTestStep(uint32_t step_index)
     }
 }
 
-// Estop braking: update reference RPM down to 0 at 1000 RPM/s, then latch fault state until cleared.
-static void prvUpdateEStopBraking(void)
-{
-    uint32_t step;
-
-    step = (ESTOP_DECEL_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS) / 1000U;
-
-    if (step == 0U)
-    {
-        step = 1U;
-    }
-
-    if (g_referenceRpm > step)
-    {
-        g_referenceRpm -= step;
-    }
-    else
-    {
-        g_referenceRpm = 0U;
-    }
-
-    g_desiredRpm = 0U;
-
-    if (g_referenceRpm == 0U)
-    {
-        g_piIntegral = 0;
-        g_motorDuty = 0U;
-
-        setDuty(0);
-        stopMotor(1);
-
-        g_motorRunning = false;
-        g_motorState = MOTOR_STATE_FAULT_LATCHED;
-    }
-}
-
 // Update the target speed in the test sequence at fixed time intervals
 static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *step_index )
 {
@@ -442,6 +444,7 @@ static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint
     (void)step_index;
 #endif
 }
+//----------------------------------------------------------------//
 
 //---------------------------Motor Task---------------------------//
 /* Motor control task implementation. */
