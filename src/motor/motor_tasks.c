@@ -104,6 +104,13 @@ static volatile bool g_motorRunning = false;
 static volatile uint16_t g_motorDuty = 0;
 static volatile uint32_t g_motorRpm = 0;
 
+// Motor speed & duty cycle limits
+#define MOTOR_SPEED_MIN_RPM 200U
+#define MOTOR_SPEED_MAX_RPM 6200U
+
+#define MOTOR_DUTY_MIN        2U
+#define MOTOR_DUTY_MAX        49U
+
 // Ramp control limits
 #define MOTOR_CONTROL_PERIOD_MS 5U
 #define ACCEL_LIMIT_RPM_PER_S   500U
@@ -112,12 +119,7 @@ static volatile uint32_t g_motorRpm = 0;
 static uint32_t g_desiredRpm = 0U;    // user-requested RPM
 static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
-// Proportional control
-#define MOTOR_SPEED_MIN_RPM 600U
-#define MOTOR_SPEED_MAX_RPM 6000U
-#define MOTOR_DUTY_MIN        2U
-#define MOTOR_DUTY_MAX        49U
-
+//--- Proportional control---//
 // Fixed-point scaling for proportional gain
 #define PI_SCALE               1000L
 
@@ -135,18 +137,11 @@ static int32_t g_piIntegral = 0;
 //-----------------------Motor test sequence -------------------------//
 // Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
 #define MOTOR_SPEED_TEST_ENABLED 1U
-#define MOTOR_SPEED_TEST_HOLD_MS 5000U
+#define MOTOR_SPEED_TEST_HOLD_MS 25000U
 
 static const uint32_t g_motorSpeedTestTargets[] =
 {
-    600U,
-    1000U,
-    1500U,
-    2000U,
-    2500U,
-    3000U,
-    2000U,
-    1000U,
+    6200U,
     1U
 };
 
@@ -598,10 +593,16 @@ void Motor_SetSpeed(uint32_t rpm)
 {
     if (rpm < MOTOR_SPEED_MIN_RPM)
     {
+        UARTprintf("Requested RPM %u is below minimum. Clamping to %u RPM.\r\n",
+                   (unsigned int)rpm,
+                   (unsigned int)MOTOR_SPEED_MIN_RPM);
         rpm = MOTOR_SPEED_MIN_RPM;
     }
     else if (rpm > MOTOR_SPEED_MAX_RPM)
     {
+        UARTprintf("Requested RPM %u is above maximum. Clamping to %u RPM.\r\n",
+                   (unsigned int)rpm,
+                   (unsigned int)MOTOR_SPEED_MAX_RPM);
         rpm = MOTOR_SPEED_MAX_RPM;
     }
 
