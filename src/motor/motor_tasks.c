@@ -42,7 +42,9 @@ void Motor_Stop(void);
 uint32_t Motor_GetSpeed(void);
 void Motor_SetSpeed(uint32_t rpm);
 
-//void Motor_EStop(void);
+void Motor_EStop(void);
+void Motor_ClearEStop(void);
+bool Motor_IsFaultLatched(void);
 //Motor_GetState(void);
 
 /*-----------------------------------------------------------*/
@@ -157,7 +159,7 @@ static volatile bool g_motorEStopRequested = false;
 
 static const uint32_t g_motorSpeedTestTargets[] =
 {
-    6200U,
+    5000U,
     1U
 };
 
@@ -338,6 +340,42 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
     return (uint32_t)duty;
 }
 
+// Estop braking: update reference RPM down to 0 at 1000 RPM/s, then latch fault state until cleared.
+static void prvUpdateEStopBraking(void)
+{
+    uint32_t step;
+
+    step = (ESTOP_DECEL_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS) / 1000U;
+
+    if (step == 0U)
+    {
+        step = 1U;
+    }
+
+    if (g_referenceRpm > step)
+    {
+        g_referenceRpm -= step;
+    }
+    else
+    {
+        g_referenceRpm = 0U;
+    }
+
+    g_desiredRpm = 0U;
+
+    if (g_referenceRpm == 0U)
+    {
+        g_piIntegral = 0;
+        g_motorDuty = 0U;
+
+        setDuty(0);
+        stopMotor(1);
+
+        g_motorRunning = false;
+        g_motorState = MOTOR_STATE_FAULT_LATCHED;
+    }
+}
+
 // Update the target speed in the test sequence at fixed time intervals
 static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index )
 {
@@ -413,19 +451,52 @@ static void prvMotorTask( void *pvParameters )
 
         prvUpdateSpeedTest(now, &last_test_step_time, &speed_test_index);
 
-        // Update the reference RPM towards the desired RPM at fixed acceleration/deceleration limits
-        prvUpdateSpeedRamp();
-
-        uint32_t measured_rpm;
-
+        // Update motor control based on current state
         taskENTER_CRITICAL();
-        measured_rpm = g_motorRpm;
+        MotorState_t state = g_motorState;
         taskEXIT_CRITICAL();
 
-        uint32_t duty_us = prvUpdatePIController(g_referenceRpm, measured_rpm);
+        /* 
+            Update motor control based on current state:
+                - If in E-stop braking state, ramp down speed to 0 at ESTOP_DECEL_RPM_PER_S, then latch fault state.
+                - If in fault latched state, hold motor stopped regardless of commands.
+                - Otherwise, update speed ramp and PI controller as normal.
+        */
+        if (state == MOTOR_STATE_ESTOP_BRAKING)
+        {
+            prvUpdateEStopBraking();
+        }
+        else if (state == MOTOR_STATE_FAULT_LATCHED)
+        {
+            setDuty(0);
+            stopMotor(1);
 
-        setDuty(duty_us);
-        g_motorDuty = duty_us;
+            g_motorDuty = 0U;
+            g_desiredRpm = 0U;
+            g_referenceRpm = 0U;
+            g_piIntegral = 0;
+        }
+        else
+        {
+            prvUpdateSpeedRamp();
+        }
+
+        // Update duty cycle based on reference RPM and measured RPM using PI controller
+        uint32_t duty = prvUpdatePIController(g_referenceRpm, g_motorRpm);
+
+        if (state != MOTOR_STATE_FAULT_LATCHED)
+        {
+            setDuty(duty);
+            g_motorDuty = duty;
+        }
+        else
+        {
+            setDuty(0);
+            stopMotor(1);
+            g_motorDuty = 0U;
+        }
+
+
         // DEBUG: log the current state every 250ms
         uint32_t print_elapsed_ms =
             (uint32_t)((now - last_print_time) * portTICK_PERIOD_MS);
@@ -438,7 +509,7 @@ static void prvMotorTask( void *pvParameters )
                 (unsigned int)g_desiredRpm,
                 (unsigned int)g_referenceRpm,
                 (unsigned int)g_motorRpm,
-                (unsigned int)duty_us,
+                (unsigned int)duty,
                 (int)g_piIntegral);
         }
 
@@ -503,15 +574,31 @@ void Motor_Init(void)
 // Start the motor
 void Motor_Start(void)
 {
+    if (!g_motorInitialised)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+
+    if ((g_motorState == MOTOR_STATE_ESTOP_BRAKING) ||
+        (g_motorState == MOTOR_STATE_FAULT_LATCHED))
+    {
+        taskEXIT_CRITICAL();
+        return;
+    }
+
+    g_motorState = MOTOR_STATE_RUNNING;
+
+    taskEXIT_CRITICAL();
+
     enableMotor();
 
-    /* Use enough duty to overcome static friction. */
     setDuty(10);
     g_motorDuty = 10;
 
     prvKickStartMotor();
 
-    /* Drop back to normal starting duty. */
     setDuty(5);
     g_motorDuty = 5;
 
@@ -545,25 +632,86 @@ uint32_t Motor_GetSpeed(void)
 
     return rpm;
 }
-
+// Set desired motor speed in RPM
 void Motor_SetSpeed(uint32_t rpm)
 {
+    taskENTER_CRITICAL();
+
+    if ((g_motorState == MOTOR_STATE_ESTOP_BRAKING) ||
+        (g_motorState == MOTOR_STATE_FAULT_LATCHED))
+    {
+        taskEXIT_CRITICAL();
+        return;
+    }
+
+    taskEXIT_CRITICAL();
+
+    if (rpm == 0U)
+    {
+        taskENTER_CRITICAL();
+        g_desiredRpm = 0U;
+        taskEXIT_CRITICAL();
+        return;
+    }
+
     if (rpm < MOTOR_SPEED_MIN_RPM)
     {
-        UARTprintf("Requested RPM %u is below minimum. Clamping to %u RPM.\r\n",
-                   (unsigned int)rpm,
-                   (unsigned int)MOTOR_SPEED_MIN_RPM);
         rpm = MOTOR_SPEED_MIN_RPM;
     }
     else if (rpm > MOTOR_SPEED_MAX_RPM)
     {
-        UARTprintf("Requested RPM %u is above maximum. Clamping to %u RPM.\r\n",
-                   (unsigned int)rpm,
-                   (unsigned int)MOTOR_SPEED_MAX_RPM);
         rpm = MOTOR_SPEED_MAX_RPM;
     }
 
+    taskENTER_CRITICAL();
     g_desiredRpm = rpm;
+    taskEXIT_CRITICAL();
+}
+
+// Estop
+void Motor_EStop(void)
+{
+    taskENTER_CRITICAL();
+
+    g_motorEStopRequested = true;
+    g_motorState = MOTOR_STATE_ESTOP_BRAKING;
+
+    /* Ignore normal commands by forcing desired RPM to zero. */
+    g_desiredRpm = 0U;
+
+    /* Reset PI integral so it does not fight braking. */
+    g_piIntegral = 0;
+
+    taskEXIT_CRITICAL();
+}
+
+void Motor_ClearEStop(void)
+{
+    taskENTER_CRITICAL();
+
+    if (g_motorState == MOTOR_STATE_FAULT_LATCHED)
+    {
+        g_motorEStopRequested = false;
+        g_motorState = MOTOR_STATE_STOPPED;
+
+        g_desiredRpm = 0U;
+        g_referenceRpm = 0U;
+        g_motorDuty = 0U;
+        g_piIntegral = 0;
+    }
+
+    taskEXIT_CRITICAL();
+}
+
+bool Motor_IsFaultLatched(void)
+{
+    bool latched;
+
+    taskENTER_CRITICAL();
+    latched = (g_motorState == MOTOR_STATE_FAULT_LATCHED);
+    taskEXIT_CRITICAL();
+
+    return latched;
 }
 
 
