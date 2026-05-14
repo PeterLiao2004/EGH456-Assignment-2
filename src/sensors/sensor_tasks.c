@@ -89,18 +89,17 @@ struct opt3001Data
 };
 /*----------------------------------------------------------- */
 // Filter sizes
-#define MAX_FILTER_SIZE (10U) // max filter size for any sensor task (used for memory allocation of filter buffers)
+#define MAX_FILTER_SIZE (10U)    // max filter size for any sensor task (used for memory allocation of filter buffers)
 #define OPT3001_FILTER_SIZE (4U) // 4-sample moving average filter for OPT3001
-
 
 // Create structure for moving average filter
 typedef struct
 {
-    float buffer[MAX_FILTER_SIZE];  // max memory allocated for filter buffer
-    uint16_t size;  // filter window size
-    uint16_t index; // current write position
-    uint16_t count; // number of valid samples currently stored
-    float sum;      // running sum
+    float buffer[MAX_FILTER_SIZE]; // max memory allocated for filter buffer
+    uint16_t size;                 // filter window size
+    uint16_t index;                // current write position
+    uint16_t count;                // number of valid samples currently stored
+    float sum;                     // running sum
 
 } MovingAverageFilter_t;
 
@@ -225,7 +224,6 @@ static void prvOpt3001Task(void *pvParameters)
 {
     prvConfigureOpt3001();
 
-
     bool success;
     struct opt3001Data xOpt3001Data;
 
@@ -290,9 +288,9 @@ void prvDisplayTask(void *pvParameters)
                        receivedOpt3001Data.sequenceNum,
                        receivedOpt3001Data.timestamp,
                        unfilteredLux_x100 / 100,
-                       abs(unfilteredLux_x100 % 100),
+                       unfilteredLux_x100 % 100,
                        filteredLux_x100 / 100,
-                       abs(filteredLux_x100 % 100));
+                       filteredLux_x100 % 100);
             xSemaphoreGive(xUARTMutex);
         }
     }

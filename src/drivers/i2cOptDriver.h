@@ -1,12 +1,4 @@
-/**************************************************************************************************
-*  Filename:       i2cOptDriver.h
-*  By:             Jesse Haviland
-*  Created:        1 February 2019
-*  Revised:        2 February 2019
-*  Revision:       1.0
-*
-*  Description:    i2c Driver for use with the Texas Instruments OP3001 Optical Sensor
-*************************************************************************************************/
+/* i2cOptDriver.h */
 
 
 

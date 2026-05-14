@@ -40,18 +40,6 @@ SemaphoreHandle_t xOpt3001ReadSemaphore = NULL;
 
 SemaphoreHandle_t xOpt3001QueueDropMutex = NULL;
 
-
-
-// SemaphoreHandle_t xSW1Semaphore = NULL;
-
-// SemaphoreHandle_t xSW2Semaphore = NULL;
-
-// SemaphoreHandle_t xTimerSemaphore = NULL;
-
-// SemaphoreHandle_t xUARTMutex = NULL;
-
-// SemaphoreHandle_t xQueueDroppingMutex = NULL;
-
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware(void);
 
@@ -63,8 +51,7 @@ void sensor_main(void)
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
 
-    /* Create the binary semaphore used to synchronize the button ISR and the
-     * button processing task. */
+    // Create semaphores and mutexes for sensor tasks
     xUARTMutex = xSemaphoreCreateMutex();
     xFastTimerSemaphore = xSemaphoreCreateBinary();
     xSlowTimerSemaphore = xSemaphoreCreateBinary();

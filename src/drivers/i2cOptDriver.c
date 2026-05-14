@@ -1,7 +1,4 @@
-/**************************************************************************************************
-*  Filename:       i2cOptDriver.c
-*  Description:    Interrupt-driven I2C driver for use with opt3001.c and the TI OPT3001 sensor
-*************************************************************************************************/
+/* i2cOptDriver.c */
 
 // ----------------------- Includes -----------------------
 #include "i2cOptDriver.h"
@@ -16,6 +13,9 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 #include "inc/hw_ints.h"
+
+#include "driverlib/uart.h"
+#include "utils/uartstdio.h"
 
 // ----------------------- Types -----------------------
 typedef enum
@@ -33,16 +33,9 @@ typedef enum
     I2C_READ_WAIT_BYTE1
 } I2CState_t;
 
-// ----------------------- Static Globals -----------------------
-// static volatile I2CState_t g_i2cState = I2C_IDLE;
-// static volatile uint8_t g_i2cAddr = 0;
-// static volatile uint8_t g_i2cReg = 0;
-// static volatile uint8_t *g_i2cData = 0;
-// static volatile bool g_i2cSuccess = false;
-
-// static SemaphoreHandle_t g_xI2CDoneSemaphore = NULL;
-
-typedef struct {
+// Structure for state tracking and mutex
+typedef struct
+{
     I2CState_t state;
     uint8_t addr;
     uint8_t reg;
@@ -59,8 +52,7 @@ static volatile I2CTransaction_t I2CTransaction = {
     .data = NULL,
     .success = false,
     .doneSemaphore = NULL,
-    .mutex = NULL
-};
+    .mutex = NULL};
 
 // ----------------------- Public Init -----------------------
 void i2cOptDriverInit(void)
@@ -119,7 +111,7 @@ bool writeI2C(uint8_t ui8Addr, uint8_t ui8Reg, uint8_t *data)
         // Release the mutex before returning
         xSemaphoreGive(I2CTransaction.mutex);
 
-        return false;   // timeout
+        return false; // timeout
     }
 
     // RELEASE MUTEX
@@ -168,7 +160,7 @@ bool readI2C(uint8_t ui8Addr, uint8_t ui8Reg, uint8_t *data)
         // Release the mutex before returning
         xSemaphoreGive(I2CTransaction.mutex);
 
-        return false;   // timeout
+        return false; // timeout
     }
 
     // RELEASE MUTEX
@@ -200,64 +192,64 @@ void I2C2IntHandler(void)
 
     switch (I2CTransaction.state)
     {
-        // ---------- Write transaction ----------
-        case I2C_WRITE_WAIT_REG:
-            I2CMasterDataPut(I2C2_BASE, I2CTransaction.data[0]);
-            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_CONT);
-            I2CTransaction.state = I2C_WRITE_WAIT_DATA0;
-            break;
+    // ---------- Write transaction ----------
+    case I2C_WRITE_WAIT_REG:
+        I2CMasterDataPut(I2C2_BASE, I2CTransaction.data[0]);
+        I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_CONT);
+        I2CTransaction.state = I2C_WRITE_WAIT_DATA0;
+        break;
 
-        case I2C_WRITE_WAIT_DATA0:
-            I2CMasterDataPut(I2C2_BASE, I2CTransaction.data[1]);
-            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
-            I2CTransaction.state = I2C_WRITE_WAIT_DATA1;
-            break;
+    case I2C_WRITE_WAIT_DATA0:
+        I2CMasterDataPut(I2C2_BASE, I2CTransaction.data[1]);
+        I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_SEND_FINISH);
+        I2CTransaction.state = I2C_WRITE_WAIT_DATA1;
+        break;
 
-        case I2C_WRITE_WAIT_DATA1:
-            I2CTransaction.success = true;
-            I2CTransaction.state = I2C_IDLE;
+    case I2C_WRITE_WAIT_DATA1:
+        I2CTransaction.success = true;
+        I2CTransaction.state = I2C_IDLE;
 
-            if (I2CTransaction.doneSemaphore != NULL)
-            {
-                xSemaphoreGiveFromISR(I2CTransaction.doneSemaphore, &xHigherPriorityTaskWoken);
-            }
-            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-            break;
+        if (I2CTransaction.doneSemaphore != NULL)
+        {
+            xSemaphoreGiveFromISR(I2CTransaction.doneSemaphore, &xHigherPriorityTaskWoken);
+        }
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        break;
 
-        // ---------- Read transaction ----------
-        case I2C_READ_WAIT_REG:
-            I2CMasterSlaveAddrSet(I2C2_BASE, I2CTransaction.addr, true);
-            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
-            I2CTransaction.state = I2C_READ_WAIT_BYTE0;
-            break;
+    // ---------- Read transaction ----------
+    case I2C_READ_WAIT_REG:
+        I2CMasterSlaveAddrSet(I2C2_BASE, I2CTransaction.addr, true);
+        I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_RECEIVE_START);
+        I2CTransaction.state = I2C_READ_WAIT_BYTE0;
+        break;
 
-        case I2C_READ_WAIT_BYTE0:
-            I2CTransaction.data[0] = I2CMasterDataGet(I2C2_BASE);
-            I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
-            I2CTransaction.state = I2C_READ_WAIT_BYTE1;
-            break;
+    case I2C_READ_WAIT_BYTE0:
+        I2CTransaction.data[0] = I2CMasterDataGet(I2C2_BASE);
+        I2CMasterControl(I2C2_BASE, I2C_MASTER_CMD_BURST_RECEIVE_FINISH);
+        I2CTransaction.state = I2C_READ_WAIT_BYTE1;
+        break;
 
-        case I2C_READ_WAIT_BYTE1:
-            I2CTransaction.data[1] = I2CMasterDataGet(I2C2_BASE);
-            I2CTransaction.success = true;
-            I2CTransaction.state = I2C_IDLE;
+    case I2C_READ_WAIT_BYTE1:
+        I2CTransaction.data[1] = I2CMasterDataGet(I2C2_BASE);
+        I2CTransaction.success = true;
+        I2CTransaction.state = I2C_IDLE;
 
-            if (I2CTransaction.doneSemaphore != NULL)
-            {
-                xSemaphoreGiveFromISR(I2CTransaction.doneSemaphore, &xHigherPriorityTaskWoken);
-            }
-            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-            break;
+        if (I2CTransaction.doneSemaphore != NULL)
+        {
+            xSemaphoreGiveFromISR(I2CTransaction.doneSemaphore, &xHigherPriorityTaskWoken);
+        }
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        break;
 
-        default:
-            I2CTransaction.success = false;
-            I2CTransaction.state = I2C_IDLE;
+    default:
+        I2CTransaction.success = false;
+        I2CTransaction.state = I2C_IDLE;
 
-            if (I2CTransaction.doneSemaphore != NULL)
-            {
-                xSemaphoreGiveFromISR(I2CTransaction.doneSemaphore, &xHigherPriorityTaskWoken);
-            }
-            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-            break;
+        if (I2CTransaction.doneSemaphore != NULL)
+        {
+            xSemaphoreGiveFromISR(I2CTransaction.doneSemaphore, &xHigherPriorityTaskWoken);
+        }
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        break;
     }
 }
