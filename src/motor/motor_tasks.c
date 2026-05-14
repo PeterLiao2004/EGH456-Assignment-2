@@ -45,7 +45,7 @@ void Motor_SetSpeed(uint32_t rpm);
 void Motor_EStop(void);
 void Motor_ClearEStop(void);
 bool Motor_IsFaultLatched(void);
-//Motor_GetState(void);
+MotorState_t Motor_GetState(void);
 
 /*-----------------------------------------------------------*/
 // Private functions
@@ -140,15 +140,6 @@ static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty ma
 static int32_t g_piIntegral = 0;
 
 //--------Motor States--------//
-typedef enum
-{
-    MOTOR_STATE_STOPPED = 0,
-    MOTOR_STATE_RUNNING,
-    MOTOR_STATE_STOPPING,
-    MOTOR_STATE_ESTOP_BRAKING,
-    MOTOR_STATE_FAULT_LATCHED
-} MotorState_t;
-
 static volatile MotorState_t g_motorState = MOTOR_STATE_STOPPED;
 static volatile bool g_motorEStopRequested = false;
 
@@ -772,6 +763,17 @@ bool Motor_IsFaultLatched(void)
     taskEXIT_CRITICAL();
 
     return latched;
+}
+
+MotorState_t Motor_GetState(void)
+{
+    MotorState_t state;
+
+    taskENTER_CRITICAL();
+    state = g_motorState;
+    taskEXIT_CRITICAL();
+
+    return state;
 }
 
 
