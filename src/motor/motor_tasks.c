@@ -113,6 +113,8 @@ static uint32_t g_desiredRpm = 0U;    // user-requested RPM
 static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
 
 // Proportional control
+#define MOTOR_SPEED_MIN_RPM 600U
+#define MOTOR_SPEED_MAX_RPM 6000U
 #define MOTOR_DUTY_MIN        2U
 #define MOTOR_DUTY_MAX        49U
 
@@ -594,8 +596,18 @@ uint32_t Motor_GetSpeed(void)
 
 void Motor_SetSpeed(uint32_t rpm)
 {
+    if (rpm < MOTOR_SPEED_MIN_RPM)
+    {
+        rpm = MOTOR_SPEED_MIN_RPM;
+    }
+    else if (rpm > MOTOR_SPEED_MAX_RPM)
+    {
+        rpm = MOTOR_SPEED_MAX_RPM;
+    }
+
     g_desiredRpm = rpm;
 }
+
 
 
 //-----------------------Code Graveyard, ignore-----------------------//
