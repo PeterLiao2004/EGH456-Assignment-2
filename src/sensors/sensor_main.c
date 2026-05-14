@@ -35,6 +35,10 @@
 SemaphoreHandle_t xFastTimerSemaphore = NULL;
 SemaphoreHandle_t xSlowTimerSemaphore = NULL;
 
+SemaphoreHandle_t xOpt3001ReadSemaphore = NULL;
+
+SemaphoreHandle_t xOpt3001QueueDropSemaphore = NULL;
+
 
 // SemaphoreHandle_t xSW1Semaphore = NULL;
 
@@ -61,6 +65,10 @@ int sensor_main(void)
      * button processing task. */
     xFastTimerSemaphore = xSemaphoreCreateBinary();
     xSlowTimerSemaphore = xSemaphoreCreateBinary();
+
+    xOpt3001ReadSemaphore = xSemaphoreCreateBinary();
+    
+    xOpt3001QueueDropSemaphore = xSemaphoreCreateBinary();
 
     // xSW1Semaphore = xSemaphoreCreateBinary();
 
@@ -96,7 +104,7 @@ static void prvConfigureTimers(void) {
     /* Timer 0A configs - fast 200Hz timer*/
     SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
     TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock / 200 -1); // 200Hz timer
+    TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock / 300 -1); // 300Hz timer
 
     TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
     IntEnable(INT_TIMER0A);
