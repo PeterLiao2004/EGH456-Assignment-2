@@ -18,6 +18,7 @@
 /* Hardware includes. */
 #include "inc/hw_memmap.h"
 #include "inc/hw_sysctl.h"
+#include "inc/hw_ints.h"
 #include "driverlib/interrupt.h"
 #include "driverlib/rom.h"
 #include "driverlib/rom_map.h"
@@ -35,6 +36,10 @@ volatile uint32_t g_ui32SysClock;
 /* Global semaphores shared between ISRs and tasks. */
 SemaphoreHandle_t xTimerSemaphore = NULL;
 SemaphoreHandle_t xButtonSemaphore = NULL;
+SemaphoreHandle_t xSW1Semaphore = NULL;
+SemaphoreHandle_t xSW2Semaphore = NULL;
+SemaphoreHandle_t xUARTMutex = NULL;
+SemaphoreHandle_t xQueueDroppingMutex = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware( void );
@@ -52,8 +57,17 @@ int main( void )
      * button processing task. */
     xTimerSemaphore = xSemaphoreCreateBinary();
     xButtonSemaphore = xSemaphoreCreateBinary();
+    xSW1Semaphore = xSemaphoreCreateBinary();
+    xSW2Semaphore = xSemaphoreCreateBinary();
+    xUARTMutex = xSemaphoreCreateMutex();
+    xQueueDroppingMutex = xSemaphoreCreateMutex();
 
-    if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
+    if ( (xTimerSemaphore != NULL) &&
+         (xButtonSemaphore != NULL) &&
+         (xSW1Semaphore != NULL) &&
+         (xSW2Semaphore != NULL) &&
+         (xUARTMutex != NULL) &&
+         (xQueueDroppingMutex != NULL) )
     {
         /* Configure application specific hardware and initialize the tasks. */
         vCreateAppTasks();
@@ -93,7 +107,62 @@ static void prvConfigureUART(void)
     GPIOPinTypeUART(GPIO_PORTA_BASE, GPIO_PIN_0 | GPIO_PIN_1);
 
     /* Initialize the UART for console I/O. */
-    UARTStdioConfig(0, 9600, 16000000);
+    UARTStdioConfig(0, 115200, 16000000);
+}
+/*-----------------------------------------------------------*/
+//  Hall sensor inputs from BoosterPack 1:
+//  Hall A -> PM3, Hall B -> PH2, Hall C -> PN2
+#define HALL_A_PORT GPIO_PORTM_BASE
+#define HALL_A_PIN  GPIO_PIN_3
+#define HALL_B_PORT GPIO_PORTH_BASE
+#define HALL_B_PIN  GPIO_PIN_2
+#define HALL_C_PORT GPIO_PORTN_BASE
+#define HALL_C_PIN  GPIO_PIN_2
+
+static void prvConfigureHallSensors( void )
+{
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOH);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
+
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOM))
+    {
+    }
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOH))
+    {
+    }
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPION))
+    {
+    }
+
+    GPIOPinTypeGPIOInput(HALL_A_PORT, HALL_A_PIN);
+    GPIOPinTypeGPIOInput(HALL_B_PORT, HALL_B_PIN);
+    GPIOPinTypeGPIOInput(HALL_C_PORT, HALL_C_PIN);
+
+    GPIOPadConfigSet(HALL_A_PORT, HALL_A_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+    GPIOPadConfigSet(HALL_B_PORT, HALL_B_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+    GPIOPadConfigSet(HALL_C_PORT, HALL_C_PIN, GPIO_STRENGTH_2MA, GPIO_PIN_TYPE_STD_WPU);
+
+    GPIOIntDisable(HALL_A_PORT, HALL_A_PIN);
+    GPIOIntDisable(HALL_B_PORT, HALL_B_PIN);
+    GPIOIntDisable(HALL_C_PORT, HALL_C_PIN);
+
+    GPIOIntTypeSet(HALL_A_PORT, HALL_A_PIN, GPIO_BOTH_EDGES);
+    GPIOIntTypeSet(HALL_B_PORT, HALL_B_PIN, GPIO_BOTH_EDGES);
+    GPIOIntTypeSet(HALL_C_PORT, HALL_C_PIN, GPIO_BOTH_EDGES);
+
+    GPIOIntClear(HALL_A_PORT, HALL_A_PIN);
+    GPIOIntClear(HALL_B_PORT, HALL_B_PIN);
+    GPIOIntClear(HALL_C_PORT, HALL_C_PIN);
+
+    GPIOIntEnable(HALL_A_PORT, HALL_A_PIN);
+    GPIOIntEnable(HALL_B_PORT, HALL_B_PIN);
+    GPIOIntEnable(HALL_C_PORT, HALL_C_PIN);
+
+    IntEnable(INT_GPIOM);
+    IntEnable(INT_GPIOH);
+    IntEnable(INT_GPION);
+    IntMasterEnable();
 }
 /*-----------------------------------------------------------*/
 
@@ -110,6 +179,7 @@ static void prvSetupHardware( void )
     // project specific pins/devices after this function
     PinoutSet(false, false);
     prvConfigureUART();
+    prvConfigureHallSensors();
 }
 /*-----------------------------------------------------------*/
 
