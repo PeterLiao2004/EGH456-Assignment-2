@@ -25,7 +25,7 @@
 #include "driverlib/timer.h"
 
 /* Sensor includes. */
-#include "drivers/i2cOptDriver.h"
+#include "drivers/i2c_driver.h"
 #include "drivers/opt3001.h"
 
 #include "driverlib/uart.h"
@@ -53,7 +53,7 @@
 extern volatile uint32_t g_ui32SysClock;
 
 // Drivers for sensors
-extern void i2cOptDriverInit(void);
+extern void I2CDriverInit(void);
 
 // Semaphores for triggering tasks
 extern SemaphoreHandle_t xUARTMutex;
@@ -432,7 +432,7 @@ static void prvConfigureOpt3001(void)
 
     I2CMasterInitExpClk(I2C2_BASE, SysCtlClockGet(), false);
 
-    i2cOptDriverInit(); // create semaphore + enable I2C interrupt
+    I2CDriverInit(); // create semaphore + enable I2C interrupt
 
     //
     // Enable interrupts to the processor.
