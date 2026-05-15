@@ -25,7 +25,6 @@
 #include "driverlib/interrupt.h"
 #include "driverlib/sysctl.h"
 #include "drivers/rtos_hw_drivers.h"
-#include "driverlib/timer.h"
 
 /* Sensor includes. */
 #include "drivers/i2cOptDriver.h"
@@ -55,58 +54,122 @@
 #define EVENT_LOW_THRESHOLD     (1 << 1) // filtered flux is too low
 #define EVENT_SENSOR_MISSED     (1 << 2) // sensor read failed / no conversation
 #define EVENT_QUEUE_FULL        (1 << 3) // queue send failed - full
-#define EVENT_BTN_TOGGLE_PLOT   (1 << 4) //Sw2 was pressed
-#define EVENT_DISPLAY_HOLD      (1 << 5) // Sw1 was pressed
 #define EVENT_DISPLAY_BITS      (EVENT_HIGH_THRESHOLD | EVENT_LOW_THRESHOLD | EVENT_SENSOR_MISSED | EVENT_QUEUE_FULL | EVENT_BTN_TOGGLE_PLOT | EVENT_DISPLAY_HOLD)
 
 #define HIGH_LUX_THRESHOLD      80
 #define LOW_LUX_THRESHOLD       10
 
 // Sysclock from main.c
-extern uint32_t g_ui32SysClock;
+extern volatile uint32_t g_ui32SysClock;
 
 extern void i2cOptDriverInit(void);
 
 volatile uint32_t g_ui32TimeStamp = 0;
-volatile static uint32_t g_pui32ButtonPressed = NULL;
-
-static volatile bool g_plotMode = false;
-static bool g_displayHold = false;  
+volatile static uint32_t g_pui32ButtonPressed = 0;
 
 extern SemaphoreHandle_t xSW1Semaphore;
 extern SemaphoreHandle_t xSW2Semaphore;
-extern SemaphoreHandle_t xTimerSemaphore;
 extern SemaphoreHandle_t xUARTMutex;
 extern SemaphoreHandle_t xQueueDroppingMutex;
 
-static QueueHandle_t xSensorQueue = NULL;
+QueueHandle_t xSensorQueue = NULL; // sensor data -> UI
+QueueHandle_t xSystemStatusQueue = NULL; // motor/control data -> UI
+QueueHandle_t xUiCommandQueue = NULL; // UI data -> motor/control
 static EventGroupHandle_t xSensorEventGroup = NULL;
 
 static void prvTaskSW1(void *pvParameters);
 static void prvTaskSW2(void *pvParameters);
-static void prvSensorTask(void *pvParameters);
 static void prvDisplayTask(void *pvParameters);
+static void vFormatTimeFromTicks(TickType_t startTick, char *timeString);
 
-void vCreateTasks(void);
+void vCreateUiTasks(void);
 
 static void prvConfigureButton(void);
-static void prvConfigureSensor(void);
 
-struct sensorData
+typedef struct
 {
     uint32_t sequenceNum;
     TickType_t timestamp;
-    uint16_t rawData;
-    uint16_t convertedLux;
-    uint16_t filteredLux;
-    uint16_t missedSampleCount;
-    uint16_t queueOverflowCount;
-};
+
+    float luxRaw;
+    float luxFiltered;
+
+    float temperatureC;
+    float humidityRH;
+
+    float accelerationFiltered;
+
+    float distanceCm;
+} SensorData_t;
+
+// Motor states
+typedef enum
+{
+    MOTOR_IDLE = 0,
+    MOTOR_STARTING,
+    MOTOR_RUNNING,
+    MOTOR_STOPPING,
+    MOTOR_STOPPED,
+    MOTOR_FAULT_LATCHED,
+    MOTOR_ESTOP
+} MotorState_t;
+static const char *pcMotorStateToString(MotorState_t state);
+
+// Status of the system
+typedef struct
+{
+    MotorState_t motorState;
+
+    bool eStopActive;
+    bool faultLatched;
+    bool coolingOn;
+    bool nightMode;
+
+    float currentRPM;
+    float desiredRPM;
+    float motorPower;
+} SystemStatus_t;
+
+//UI commands
+typedef enum
+{
+    UI_CMD_START_MOTOR = 0,
+    UI_CMD_STOP_MOTOR,
+    UI_CMD_SET_RPM,
+    UI_CMD_SET_THRESHOLDS,
+    UI_CMD_ACK_ESTOP,
+    UI_CMD_TOGGLE_SENSOR_VIEW
+} UiCommandType_t;
+
+// thresholds for sensors
+typedef struct
+{
+    float maxMotorPower;
+    float maxAcceleration;
+    float minDistanceCm;
+
+    float maxTemperatureC;
+    float maxHumidityRH;
+
+    float nightLuxThreshold;
+} UiThresholds_t;
+
+// what UI sends to motor/control
+typedef struct
+{
+    UiCommandType_t commandType;
+
+    float desiredRPM;
+
+    UiThresholds_t thresholds;
+} UiCommand_t;
 
 /*-----------------------------------------------------------*/
 
-void vCreateTasks(void)
+void vCreateUiTasks(void)
 {
+    BaseType_t taskCreated;
+
     prvConfigureButton();
 
     xSensorEventGroup = xEventGroupCreate();
@@ -120,7 +183,7 @@ void vCreateTasks(void)
         return;
     }
 
-    xSensorQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof(struct sensorData));
+    xSensorQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof(SensorData_t));
     if (xSensorQueue == NULL)
     {
         if (xSemaphoreTake(xUARTMutex, portMAX_DELAY))
@@ -131,44 +194,87 @@ void vCreateTasks(void)
         return;
     }
 
-    xTaskCreate(prvTaskSW1,
-                "SW1",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 2,
-                NULL);
+    xSystemStatusQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof(SystemStatus_t));
+    if (xSystemStatusQueue == NULL)
+    {
+        if (xSemaphoreTake(xUARTMutex, portMAX_DELAY))
+        {
+            UARTprintf("System status queue creation failed\r\n");
+            xSemaphoreGive(xUARTMutex);
+        }
+        return;
+    }
 
-    xTaskCreate(prvTaskSW2,
-                "SW2",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 2,
-                NULL);
+    xUiCommandQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof(UiCommand_t));
+    if (xUiCommandQueue == NULL)
+    {
+        if (xSemaphoreTake(xUARTMutex, portMAX_DELAY))
+        {
+            UARTprintf("UI command queue creation failed\r\n");
+            xSemaphoreGive(xUARTMutex);
+        }
+        return;
+    }
 
-    xTaskCreate(prvSensorTask,
-                "Sensor",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+    taskCreated = xTaskCreate(prvTaskSW1,
+                              "SW1",
+                              512,
+                              NULL,
+                              tskIDLE_PRIORITY + 2,
+                              NULL);
+    if (taskCreated != pdPASS)
+    {
+        UARTprintf("SW1 task creation failed\r\n");
+    }
 
-    xTaskCreate(prvDisplayTask,
-                "Display",
-                configMINIMAL_STACK_SIZE * 6,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+    taskCreated = xTaskCreate(prvTaskSW2,
+                              "SW2",
+                              512,
+                              NULL,
+                              tskIDLE_PRIORITY + 2,
+                              NULL);
+    if (taskCreated != pdPASS)
+    {
+        UARTprintf("SW2 task creation failed\r\n");
+    }
+
+    taskCreated = xTaskCreate(prvDisplayTask,
+                              "Display",
+                              2048,
+                              NULL,
+                              tskIDLE_PRIORITY + 1,
+                              NULL);
+    if (taskCreated != pdPASS)
+    {
+        UARTprintf("Display task creation failed\r\n");
+    }
 }
 
 /*-----------------------------------------------------------*/
 
 static void prvTaskSW1(void *pvParameters)
 {
+    UiCommand_t command;
+    static bool motorRequestedOn = false;
+
     for (;;)
     {
         if (xSemaphoreTake(xSW1Semaphore, portMAX_DELAY) == pdPASS)
         {
-            xEventGroupSetBits(xSensorEventGroup, EVENT_DISPLAY_HOLD);
+            motorRequestedOn = !motorRequestedOn;
+
+            if (motorRequestedOn)
+            {
+                command.commandType = UI_CMD_START_MOTOR;
+            }
+            else
+            {
+                command.commandType = UI_CMD_STOP_MOTOR;
+            }
+
+            command.desiredRPM = 0.0f;
+
+            xQueueSend(xUiCommandQueue, &command, 0);
         }
     }
 }
@@ -177,102 +283,119 @@ static void prvTaskSW1(void *pvParameters)
 
 static void prvTaskSW2(void *pvParameters)
 {
+    UiCommand_t command;
+
     for (;;)
     {
         if (xSemaphoreTake(xSW2Semaphore, portMAX_DELAY) == pdPASS)
         {
-            xEventGroupSetBits(xSensorEventGroup, EVENT_BTN_TOGGLE_PLOT);
+            command.commandType = UI_CMD_ACK_ESTOP;
+            command.desiredRPM = 0.0f;
+
+            xQueueSend(xUiCommandQueue, &command, 0);
         }
     }
 }
 
 /*-----------------------------------------------------------*/
-
-static void prvSensorTask(void *pvParameters)
+static const char *pcMotorStateToString(MotorState_t state)
 {
-    prvConfigureSensor();
-
-    struct sensorData xSensorData;
-    bool success;
-    float convertedLux_float = 0;
-
-    int past1 = 0;
-    int past2 = 0;
-    int past3 = 0;
-    int past4 = 0;
-
-    xSensorData.sequenceNum = 0U;
-    xSensorData.timestamp = 0U;
-    xSensorData.rawData = 0U;
-    xSensorData.convertedLux = 0U;
-    xSensorData.filteredLux = 0U;
-    xSensorData.missedSampleCount = 0U;
-    xSensorData.queueOverflowCount = 0U;
-
-    for (;;)
+    switch (state)
     {
-        if (xSemaphoreTake(xTimerSemaphore, portMAX_DELAY) == pdPASS)
-        {
-            success = sensorOpt3001Read(&xSensorData.rawData);
+        case MOTOR_IDLE:
+            return "Idle";
 
-            if (success)
-            {
-                xSensorData.sequenceNum++;
-                xSensorData.timestamp = xTaskGetTickCount();
+        case MOTOR_STARTING:
+            return "Starting";
 
-                sensorOpt3001Convert(xSensorData.rawData, &convertedLux_float);
-                xSensorData.convertedLux = (uint16_t)convertedLux_float;
+        case MOTOR_RUNNING:
+            return "Running";
 
-                past4 = past3;
-                past3 = past2;
-                past2 = past1;
-                past1 = xSensorData.convertedLux;
+        case MOTOR_STOPPING:
+            return "Stopping";
 
-                xSensorData.filteredLux = (past1 + past2 + past3 + past4) / 4;
+        case MOTOR_STOPPED:
+            return "Stopped";
 
-                if (xSensorData.filteredLux > HIGH_LUX_THRESHOLD)
-                {
-                    xEventGroupSetBits(xSensorEventGroup, EVENT_HIGH_THRESHOLD);
-                }
+        case MOTOR_FAULT_LATCHED:
+            return "Fault Latched";
 
-                if (xSensorData.filteredLux < LOW_LUX_THRESHOLD)
-                {
-                    xEventGroupSetBits(xSensorEventGroup, EVENT_LOW_THRESHOLD);
-                }
+        case MOTOR_ESTOP:
+            return "E-STOP";
 
-                xSemaphoreTake(xQueueDroppingMutex, portMAX_DELAY);
-
-                if (xQueueSend(xSensorQueue, (void *)&xSensorData, 0) != pdPASS)
-                {
-                    xSensorData.queueOverflowCount++;
-                    xEventGroupSetBits(xSensorEventGroup, EVENT_QUEUE_FULL);
-                }
-
-                xSemaphoreGive(xQueueDroppingMutex);
-            }
-            else
-            {
-                xSensorData.missedSampleCount++;
-                xEventGroupSetBits(xSensorEventGroup, EVENT_SENSOR_MISSED);
-            }
-        }
+        default:
+            return "Unknown";
     }
 }
 
+/*-----------------------------------------------------------*/
+// time
+static void vFormatTimeFromTicks(TickType_t startTick, char *timeString)
+{
+    TickType_t nowTick = xTaskGetTickCount();
+    uint32_t elapsedSeconds = (nowTick - startTick) / configTICK_RATE_HZ;
+
+    uint32_t hours = 12;
+    uint32_t minutes = 0;
+    uint32_t seconds = 0;
+    bool isPM = false;
+
+    seconds = elapsedSeconds % 60;
+    minutes = (elapsedSeconds / 60) % 60;
+    hours = 12 + ((elapsedSeconds / 3600) % 12);
+
+    if (hours > 12)
+    {
+        hours -= 12;
+    }
+
+    if (((elapsedSeconds / 3600) % 24) >= 12)
+    {
+        isPM = true;
+    }
+
+    usprintf(timeString,
+             "%02u:%02u:%02u %s",
+             hours,
+             minutes,
+             seconds,
+             isPM ? "PM" : "AM");
+}
 /*-----------------------------------------------------------*/
 
 static void prvDisplayTask(void *pvParameters)
 {
-    struct sensorData receivedSensorData;
-    struct sensorData latestSensorData;
+    SensorData_t receivedSensorData;
+    SensorData_t latestSensorData;
+
+    SystemStatus_t receivedSystemStatus;
+    SystemStatus_t latestSystemStatus;
+
     tContext sContext;
 
+    latestSystemStatus.motorState = MOTOR_IDLE;
+    latestSystemStatus.eStopActive = false;
+    latestSystemStatus.faultLatched = false;
+    latestSystemStatus.coolingOn = false;
+    latestSystemStatus.nightMode = false;
+    latestSystemStatus.currentRPM = 0.0f;
+    latestSystemStatus.desiredRPM = 0.0f;
+    latestSystemStatus.motorPower = 0.0f;
+
     tRectangle screenRect = {0, 0, 319, 239};
+
+    // Top 40 pixels reserved for motor state/header
     tRectangle topArea = {0, 0, 319, 39};
+
+    // Graph starts below the top area
     tRectangle graphArea = {0, 40, 319, 239};
 
     char line1[40];
-    char line2[40];
+
+    // clock
+    char timeString[20];
+    TickType_t clockStartTick;
+    TickType_t lastClockUpdateTick;
 
     static int x = 20;
     static int lastFilteredY = 200;
@@ -280,10 +403,13 @@ static void prvDisplayTask(void *pvParameters)
 
     int filteredY;
     int rawY;
-    int luxMax = 100;
 
-    EventBits_t uxBits;
-    EventBits_t uxStatusBits = 0;
+    int graphTop = 50;      // leave small gap under header
+    int graphBottom = 220;  // bottom of graph
+    int graphHeight = graphBottom - graphTop;
+
+    float luxMax = 100.0f;  // change this if your lux range is bigger
+
     bool haveSensorData = false;
     bool redrawHeader = true;
 
@@ -291,35 +417,18 @@ static void prvDisplayTask(void *pvParameters)
     GrContextInit(&sContext, &g_sKentec320x240x16_SSD2119);
     GrContextFontSet(&sContext, &g_sFontFixed6x8);
 
+    // Clear whole screen
     GrContextForegroundSet(&sContext, ClrBlack);
     GrRectFill(&sContext, &screenRect);
 
-    GrContextForegroundSet(&sContext, ClrWhite);
-    GrStringDraw(&sContext, "OPT3001 Lux Plot", -1, 10, 10, false);
+    clockStartTick = xTaskGetTickCount();
+    lastClockUpdateTick = clockStartTick;
 
     for (;;)
     {
-        uxBits = xEventGroupWaitBits(xSensorEventGroup,
-                                     EVENT_DISPLAY_BITS,
-                                     pdTRUE,
-                                     pdFALSE,
-                                     0); // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! portMAX_DELAY
-
-        if ((uxBits & EVENT_BTN_TOGGLE_PLOT) != 0)
+        if ((xTaskGetTickCount() - lastClockUpdateTick) >= pdMS_TO_TICKS(1000))
         {
-            g_plotMode = !g_plotMode;
-            redrawHeader = true;
-        }
-
-        if ((uxBits & EVENT_DISPLAY_HOLD) != 0)
-        {
-            g_displayHold = !g_displayHold;
-            redrawHeader = true;
-        }
-
-        uxStatusBits |= (uxBits & (EVENT_HIGH_THRESHOLD | EVENT_LOW_THRESHOLD | EVENT_SENSOR_MISSED | EVENT_QUEUE_FULL));
-        if ((uxStatusBits != 0) || (uxBits != 0))
-        {
+            lastClockUpdateTick = xTaskGetTickCount();
             redrawHeader = true;
         }
 
@@ -332,124 +441,145 @@ static void prvDisplayTask(void *pvParameters)
             redrawHeader = true;
 
             xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-            UARTprintf("Seq Num: %5d | Timestamp: %5d | Raw Data: %5d | Converted Lux: %5d | Filtered Lux: %5d | Missed Samples: %5d | Queue Overflows: %5d\n",
-                       receivedSensorData.sequenceNum,
-                       receivedSensorData.timestamp,
-                       receivedSensorData.rawData,
-                       receivedSensorData.convertedLux,
-                       receivedSensorData.filteredLux,
-                       receivedSensorData.missedSampleCount,
-                       receivedSensorData.queueOverflowCount);
+            UARTprintf("Seq:%u Time:%u Lux Raw:%d Lux Filt:%d Temp:%d Hum:%d Acc:%d Dist:%d\r\n",
+                    receivedSensorData.sequenceNum,
+                    receivedSensorData.timestamp,
+                    (int)receivedSensorData.luxRaw,
+                    (int)receivedSensorData.luxFiltered,
+                    (int)receivedSensorData.temperatureC,
+                    (int)receivedSensorData.humidityRH,
+                    (int)receivedSensorData.accelerationFiltered,
+                    (int)receivedSensorData.distanceCm);
             xSemaphoreGive(xUARTMutex);
+        }
+
+        if (xQueueReceive(xSystemStatusQueue,
+                        (void *)&receivedSystemStatus,
+                        0) == pdPASS)
+        {
+            latestSystemStatus = receivedSystemStatus;
+            redrawHeader = true;
         }
 
         if (redrawHeader)
         {
+            // Clear only the top header area
             GrContextForegroundSet(&sContext, ClrBlack);
             GrRectFill(&sContext, &topArea);
 
-            GrContextForegroundSet(&sContext, ClrWhite);
+            // formatting clock
+            vFormatTimeFromTicks(clockStartTick, timeString);
 
-            if (g_plotMode)
+            GrContextForegroundSet(&sContext, ClrWhite);
+            GrStringDraw(&sContext,
+                        timeString,
+                        -1,
+                        5,
+                        25,
+                        false);
+
+            // Centre motor state text
+            GrContextForegroundSet(&sContext, ClrWhite);
+            GrStringDrawCentered(&sContext,
+                                pcMotorStateToString(latestSystemStatus.motorState),
+                                 -1,
+                                 160,
+                                 10,
+                                 false);
+            if (latestSystemStatus.eStopActive || latestSystemStatus.faultLatched)
             {
-                GrStringDraw(&sContext, "Mode: Raw + Filtered", -1, 10, 5, false);
+                GrContextForegroundSet(&sContext, ClrRed);
+                GrStringDraw(&sContext, "FAULT/E-STOP", -1, 220, 8, false);
+            }
+            else if (latestSystemStatus.motorState == MOTOR_RUNNING)
+            {
+                GrContextForegroundSet(&sContext, ClrGreen);
+                GrStringDraw(&sContext, "NORMAL", -1, 235, 8, false);
             }
             else
             {
-                GrStringDraw(&sContext, "Mode: Filtered Only", -1, 10, 5, false);
+                GrContextForegroundSet(&sContext, ClrOrange);
+                GrStringDraw(&sContext, "STOPPED", -1, 235, 8, false);
+            }
+
+            GrContextForegroundSet(&sContext, ClrWhite);
+
+            if (latestSystemStatus.nightMode)
+            {
+                GrStringDraw(&sContext, "Night", -1, 5, 8, false);
+            }
+            else
+            {
+                GrStringDraw(&sContext, "Day", -1, 5, 8, false);
             }
 
             if (haveSensorData)
             {
-                usprintf(line1, "Raw:%u Filt:%u",
-                         latestSensorData.convertedLux,
-                         latestSensorData.filteredLux);
-                GrStringDraw(&sContext, line1, -1, 10, 22, false);
+                usprintf(line1, "L:%d T:%d H:%d D:%d",
+                        (int)latestSensorData.luxFiltered,
+                        (int)latestSensorData.temperatureC,
+                        (int)latestSensorData.humidityRH,
+                        (int)latestSensorData.distanceCm);
+
+                GrStringDrawCentered(&sContext,
+                                     line1,
+                                     -1,
+                                     160,
+                                     25,
+                                     false);
             }
 
-            if ((uxStatusBits & EVENT_HIGH_THRESHOLD) != 0)
-            {
-                GrContextForegroundSet(&sContext, ClrRed);
-                GrStringDraw(&sContext, "HIGH", -1, 250, 5, false);
-            }
-
-            if ((uxStatusBits & EVENT_LOW_THRESHOLD) != 0)
-            {
-                GrContextForegroundSet(&sContext, ClrYellow);
-                GrStringDraw(&sContext, "LOW", -1, 250, 5, false);
-            }
-
-            if ((uxStatusBits & EVENT_SENSOR_MISSED) != 0)
-            {
-                GrContextForegroundSet(&sContext, ClrMagenta);
-                GrStringDraw(&sContext, "MISS", -1, 250, 15, false);
-            }
-
-            if ((uxStatusBits & EVENT_QUEUE_FULL) != 0)
-            {
-                GrContextForegroundSet(&sContext, ClrCyan);
-                GrStringDraw(&sContext, "FULL", -1, 250, 25, false);
-            }
-
-            if (g_displayHold)
-            {
-                GrContextForegroundSet(&sContext, ClrWhite);
-                GrStringDraw(&sContext, "HOLD", -1, 210, 22, false);
-            }
-
-            uxStatusBits = 0;
             redrawHeader = false;
         }
 
-        if (haveSensorData && !g_displayHold)
+        if (haveSensorData)
         {
-            receivedSensorData = latestSensorData;
+            // Convert lux values into screen y-coordinates
+            filteredY = graphBottom -
+                        (int)((latestSensorData.luxFiltered / luxMax) * graphHeight);
 
-            filteredY = 200 - ((receivedSensorData.filteredLux * 120) / luxMax);
-            rawY = 200 - ((receivedSensorData.convertedLux * 120) / luxMax);
+            rawY = graphBottom -
+                (int)((latestSensorData.luxRaw / luxMax) * graphHeight);
 
-            if (filteredY < 60)
+            // Clamp filtered value inside graph area
+            if (filteredY < graphTop)
             {
-                filteredY = 60;
+                filteredY = graphTop;
             }
-            if (filteredY > 200)
+            if (filteredY > graphBottom)
             {
-                filteredY = 200;
-            }
-
-            if (rawY < 60)
-            {
-                rawY = 60;
-            }
-            if (rawY > 200)
-            {
-                rawY = 200;
+                filteredY = graphBottom;
             }
 
-            if (g_plotMode)
+            // Clamp raw value inside graph area
+            if (rawY < graphTop)
             {
-                GrContextForegroundSet(&sContext, ClrYellow);
-                GrLineDraw(&sContext, x - 1, lastRawY, x, rawY);
-
-                GrContextForegroundSet(&sContext, ClrCyan);
-                GrLineDraw(&sContext, x - 1, lastFilteredY, x, filteredY);
+                rawY = graphTop;
             }
-            else
+            if (rawY > graphBottom)
             {
-                GrContextForegroundSet(&sContext, ClrCyan);
-                GrLineDraw(&sContext, x - 1, lastFilteredY, x, filteredY);
+                rawY = graphBottom;
             }
 
-            lastFilteredY = filteredY;
+            // Draw raw lux in yellow
+            GrContextForegroundSet(&sContext, ClrYellow);
+            GrLineDraw(&sContext, x - 1, lastRawY, x, rawY);
+
+            // Draw filtered lux in cyan
+            GrContextForegroundSet(&sContext, ClrCyan);
+            GrLineDraw(&sContext, x - 1, lastFilteredY, x, filteredY);
+
             lastRawY = rawY;
+            lastFilteredY = filteredY;
 
             x++;
 
+            // Reset graph when it reaches the right side
             if (x > 300)
             {
                 x = 20;
-                lastFilteredY = 200;
-                lastRawY = 200;
+                lastRawY = graphBottom;
+                lastFilteredY = graphBottom;
 
                 GrContextForegroundSet(&sContext, ClrBlack);
                 GrRectFill(&sContext, &graphArea);
@@ -471,51 +601,6 @@ static void prvConfigureButton(void)
     GPIOIntEnable(BUTTONS_GPIO_BASE, ALL_BUTTONS);
 
     IntEnable(INT_GPIOJ);
-}
-
-/*-----------------------------------------------------------*/
-
-static void prvConfigureSensor(void)
-{
-    bool success;
-
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C0);
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOB);
-
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_I2C0))
-    {
-    }
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPIOB))
-    {
-    }
-
-    GPIOPinConfigure(GPIO_PB2_I2C0SCL);
-    GPIOPinConfigure(GPIO_PB3_I2C0SDA);
-
-    GPIOPinTypeI2CSCL(GPIO_PORTB_BASE, GPIO_PIN_2);
-    GPIOPinTypeI2C(GPIO_PORTB_BASE, GPIO_PIN_3);
-
-    I2CMasterInitExpClk(I2C0_BASE, SysCtlClockGet(), false);
-
-    i2cOptDriverInit();
-
-    sensorOpt3001Init();
-
-    success = sensorOpt3001Test();
-
-    while (!success)
-    {
-        SysCtlDelay(g_ui32SysClock);
-
-        xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-        UARTprintf("Test Failed, Trying again\n");
-        xSemaphoreGive(xUARTMutex);
-
-        sensorOpt3001Init();
-        success = sensorOpt3001Test();
-    }
 }
 
 /*-----------------------------------------------------------*/

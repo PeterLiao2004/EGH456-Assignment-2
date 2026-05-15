@@ -66,24 +66,22 @@
 /*-----------------------------------------------------------*/
 
 /* The system clock frequency. */
-uint32_t g_ui32SysClock;
+extern volatile uint32_t g_ui32SysClock;
 
 /* Global for binary semaphore shared between tasks. */
-SemaphoreHandle_t xSW1Semaphore = NULL;
+extern SemaphoreHandle_t xSW1Semaphore;
 
-SemaphoreHandle_t xSW2Semaphore = NULL;
+extern SemaphoreHandle_t xSW2Semaphore;
 
-SemaphoreHandle_t xTimerSemaphore = NULL;
+extern SemaphoreHandle_t xUARTMutex;
 
-SemaphoreHandle_t xUARTMutex = NULL;
-
-SemaphoreHandle_t xQueueDroppingMutex = NULL;
+extern SemaphoreHandle_t xQueueDroppingMutex;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware(void);
 
 /* create the LED task. */
-extern void vCreateTasks(void);
+extern void vCreateUiTasks(void);
 /*-----------------------------------------------------------*/
 
 int ui_main(void)
@@ -91,26 +89,20 @@ int ui_main(void)
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
 
-    UARTprintf("MAIN AFTER HARDWARE SETUP\r\n");
-
     /* Create the binary semaphore used to synchronize the button ISR and the
      * button processing task. */
     xSW1Semaphore = xSemaphoreCreateBinary();
 
     xSW2Semaphore = xSemaphoreCreateBinary();
 
-    xTimerSemaphore = xSemaphoreCreateBinary();
-
     xUARTMutex = xSemaphoreCreateMutex();
 
     xQueueDroppingMutex = xSemaphoreCreateMutex();
 
-    UARTprintf("SEMAPHORES CREATED START\r\n");
-
-    if ((xSW1Semaphore != NULL) && (xSW2Semaphore != NULL) && (xTimerSemaphore != NULL) && (xUARTMutex != NULL) && (xQueueDroppingMutex != NULL))
+    if ((xSW1Semaphore != NULL) && (xSW2Semaphore != NULL) && (xUARTMutex != NULL) && (xQueueDroppingMutex != NULL))
     {
         /* Configure application specific hardware and initialize the task thread. */
-        vCreateTasks();
+        vCreateUiTasks();
 
         /* Start the tasks. */
         vTaskStartScheduler();
@@ -151,24 +143,12 @@ static void prvConfigureUART(void)
     /* Initialize the UART for console I/O. */
     UARTStdioConfig(0, 115200, 16000000);
 }
-/*-----------------------------------------------------------*/
-
-static void prvConfigureTimer(void) {
-    /* Timer configs */
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER0);
-    TimerConfigure(TIMER0_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER0_BASE, TIMER_A, g_ui32SysClock / 5 -1); // 5Hz timer
-
-    TimerIntEnable(TIMER0_BASE, TIMER_TIMA_TIMEOUT);
-    IntEnable(INT_TIMER0A);
-    TimerEnable(TIMER0_BASE, TIMER_A);
-}
 
 /*-----------------------------------------------------------*/
 
 static void prvSetupHardware(void)
 {
-    prvConfigureTimer();
+    prvConfigureUART();
 }
 
 /*-----------------------------------------------------------*/

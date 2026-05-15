@@ -45,7 +45,6 @@ extern void xPortPendSVHandler(void);
 extern void vPortSVCHandler(void);
 extern void xPortSysTickHandler(void);
 extern void xButtonsHandler(void);
-extern void xTimerHandler(void);
 extern void HallSensorHandler(void);
 
 //*****************************************************************************
@@ -107,7 +106,7 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // ADC Sequence 2
     IntDefaultHandler,                      // ADC Sequence 3
     IntDefaultHandler,                      // Watchdog timer
-    xTimerHandler,                      // Timer 0 subtimer A
+    IntDefaultHandler,                      // Timer 0 subtimer A
     IntDefaultHandler,                      // Timer 0 subtimer B
     IntDefaultHandler,                      // Timer 1 subtimer A
     IntDefaultHandler,                      // Timer 1 subtimer B
