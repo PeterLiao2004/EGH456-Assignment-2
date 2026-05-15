@@ -36,6 +36,10 @@ volatile uint32_t g_ui32SysClock;
 /* Global semaphores shared between ISRs and tasks. */
 SemaphoreHandle_t xTimerSemaphore = NULL;
 SemaphoreHandle_t xButtonSemaphore = NULL;
+SemaphoreHandle_t xSW1Semaphore = NULL;
+SemaphoreHandle_t xSW2Semaphore = NULL;
+SemaphoreHandle_t xUARTMutex = NULL;
+SemaphoreHandle_t xQueueDroppingMutex = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware( void );
@@ -53,8 +57,17 @@ int main( void )
      * button processing task. */
     xTimerSemaphore = xSemaphoreCreateBinary();
     xButtonSemaphore = xSemaphoreCreateBinary();
+    xSW1Semaphore = xSemaphoreCreateBinary();
+    xSW2Semaphore = xSemaphoreCreateBinary();
+    xUARTMutex = xSemaphoreCreateMutex();
+    xQueueDroppingMutex = xSemaphoreCreateMutex();
 
-    if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
+    if ( (xTimerSemaphore != NULL) &&
+         (xButtonSemaphore != NULL) &&
+         (xSW1Semaphore != NULL) &&
+         (xSW2Semaphore != NULL) &&
+         (xUARTMutex != NULL) &&
+         (xQueueDroppingMutex != NULL) )
     {
         /* Configure application specific hardware and initialize the tasks. */
         vCreateAppTasks();
