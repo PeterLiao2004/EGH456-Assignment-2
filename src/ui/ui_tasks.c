@@ -27,7 +27,6 @@
 #include "drivers/rtos_hw_drivers.h"
 
 /* Sensor includes. */
-#include "drivers/i2cOptDriver.h"
 #include "drivers/opt3001.h"
 
 #include "driverlib/uart.h"

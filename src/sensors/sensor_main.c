@@ -32,7 +32,6 @@
 /*-----------------------------------------------------------*/
 
 /* Global for binary semaphore shared between tasks. */
-SemaphoreHandle_t xUARTMutex = NULL;
 SemaphoreHandle_t xFastTimerSemaphore = NULL;
 SemaphoreHandle_t xSlowTimerSemaphore = NULL;
 
@@ -52,7 +51,6 @@ void sensor_main(void)
     prvSetupHardware();
 
     // Create semaphores and mutexes for sensor tasks
-    xUARTMutex = xSemaphoreCreateMutex();
     xFastTimerSemaphore = xSemaphoreCreateBinary();
     xSlowTimerSemaphore = xSemaphoreCreateBinary();
 
