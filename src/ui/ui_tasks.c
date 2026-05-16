@@ -167,6 +167,7 @@ typedef struct
 
 void vCreateUiTasks(void)
 {
+    UARTprintf("Heap before UI init: %u\r\n", xPortGetFreeHeapSize());
     BaseType_t taskCreated;
 
     prvConfigureButton();
@@ -217,7 +218,7 @@ void vCreateUiTasks(void)
 
     taskCreated = xTaskCreate(prvTaskSW1,
                               "SW1",
-                              512,
+                              configMINIMAL_STACK_SIZE,
                               NULL,
                               tskIDLE_PRIORITY + 2,
                               NULL);
@@ -228,7 +229,7 @@ void vCreateUiTasks(void)
 
     taskCreated = xTaskCreate(prvTaskSW2,
                               "SW2",
-                              512,
+                              configMINIMAL_STACK_SIZE,
                               NULL,
                               tskIDLE_PRIORITY + 2,
                               NULL);
@@ -239,13 +240,14 @@ void vCreateUiTasks(void)
 
     taskCreated = xTaskCreate(prvDisplayTask,
                               "Display",
-                              2048,
+                              configMINIMAL_STACK_SIZE,
                               NULL,
                               tskIDLE_PRIORITY + 1,
                               NULL);
     if (taskCreated != pdPASS)
     {
         UARTprintf("Display task creation failed\r\n");
+        UARTprintf("Free heap: %u\r\n", xPortGetFreeHeapSize());
     }
 }
 

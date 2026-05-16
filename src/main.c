@@ -56,7 +56,6 @@ int main( void )
     IntMasterEnable();
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
-    UARTprintf("After prvSetupHardware\n");
 
     sensor_main();
 
