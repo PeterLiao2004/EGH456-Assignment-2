@@ -39,21 +39,18 @@ extern volatile uint32_t g_ui32SysClock;
 // extern SemaphoreHandle_t xTimerSemaphore;
 // extern SemaphoreHandle_t xButtonSemaphore;
 
-// static volatile uint32_t g_ui32TimeStamp = 0;
-// static volatile uint32_t g_ui32ButtonPressCount = 0;
+static volatile uint32_t g_ui32TimeStamp = 0;
+static volatile uint32_t g_ui32ButtonPressCount = 0;
 
 /*-----------------------------------------------------------*/
 
 void vCreateAppTasks(void)
 {
-    /* Configure the peripherals used by the application tasks. */
-    //prvConfigureLED();
-    //prvConfigureButton();
-    //prvConfigureHWTimer();
 
     /* Create the application tasks. */
-    // vCreateMotorTasks();
-    //vCreateControlTasks();
+    vCreateMotorTasks();
+    vCreateControlTasks();
     vCreateSensorTasks();
-    //vCreateUiTasks();
+    vCreateUiTasks();
+
 }

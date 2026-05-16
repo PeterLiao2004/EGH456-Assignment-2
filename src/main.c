@@ -33,9 +33,13 @@
 /* The system clock frequency. */
 volatile uint32_t g_ui32SysClock;
 
-// /* Global semaphores shared between ISRs and tasks. */
-// SemaphoreHandle_t xTimerSemaphore = NULL;
-// SemaphoreHandle_t xButtonSemaphore = NULL;
+/* Global semaphores shared between ISRs and tasks. */
+SemaphoreHandle_t xTimerSemaphore = NULL;
+SemaphoreHandle_t xButtonSemaphore = NULL;
+SemaphoreHandle_t xSW1Semaphore = NULL;
+SemaphoreHandle_t xSW2Semaphore = NULL;
+SemaphoreHandle_t xUARTMutex = NULL;
+SemaphoreHandle_t xQueueDroppingMutex = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware( void );
@@ -54,22 +58,30 @@ int main( void )
     prvSetupHardware();
     UARTprintf("After prvSetupHardware\n");
 
-    // /* Create the binary semaphore used to synchronize the button ISR and the
-    //  * button processing task. */
-    // xTimerSemaphore = xSemaphoreCreateBinary();
-    // xButtonSemaphore = xSemaphoreCreateBinary();
+    sensor_main();
 
-    // if ( (xTimerSemaphore != NULL) && (xButtonSemaphore != NULL) )
-    // {
-        /* Initialize the sensor configurations. */
-        sensor_main();
+    /* Create the binary semaphore used to synchronize the button ISR and the
+     * button processing task. */
+    xTimerSemaphore = xSemaphoreCreateBinary();
+    xButtonSemaphore = xSemaphoreCreateBinary();
+    xSW1Semaphore = xSemaphoreCreateBinary();
+    xSW2Semaphore = xSemaphoreCreateBinary();
+    xUARTMutex = xSemaphoreCreateMutex();
+    xQueueDroppingMutex = xSemaphoreCreateMutex();
 
+    if ( (xTimerSemaphore != NULL) &&
+         (xButtonSemaphore != NULL) &&
+         (xSW1Semaphore != NULL) &&
+         (xSW2Semaphore != NULL) &&
+         (xUARTMutex != NULL) &&
+         (xQueueDroppingMutex != NULL) )
+    {
         /* Configure application specific hardware and initialize the tasks. */
         vCreateAppTasks();
 
         /* Start the tasks. */
         vTaskStartScheduler();
-    // }
+    }
 
     /* If all is well, the scheduler will now be running, and the following
     line will never be reached.  If the following line does execute, then

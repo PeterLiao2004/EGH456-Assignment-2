@@ -47,6 +47,7 @@ extern void xPortSysTickHandler(void);
 extern void Timer0IntHandler(void);
 extern void Timer1IntHandler(void);
 extern void I2C2IntHandler(void);
+extern void xButtonsHandler(void);
 extern void HallSensorHandler(void);
 
 //*****************************************************************************
