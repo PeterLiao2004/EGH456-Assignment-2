@@ -60,7 +60,7 @@
 #include "grlib.h"
 #include "drivers/Kentec320x240x16_ssd2119_spi.h"
 #include "drivers/touch.h"
-#include "widget.h"
+#include "widget.h" 
 #include "canvas.h"
 #include "pushbutton.h"
 /*-----------------------------------------------------------*/
