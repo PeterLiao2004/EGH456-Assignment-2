@@ -77,7 +77,6 @@ int main( void )
     {
         /* Configure application specific hardware and initialize the tasks. */
         vCreateAppTasks();
-
         /* Start the tasks. */
         vTaskStartScheduler();
     }

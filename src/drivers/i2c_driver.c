@@ -57,6 +57,7 @@ static volatile I2CTransaction_t I2CTransaction = {
 // ----------------------- Public Init -----------------------
 void I2CDriverInit(void)
 {
+    //  Create semaphore and mutex if they haven't been created yet
     if (I2CTransaction.doneSemaphore == NULL)
     {
         I2CTransaction.doneSemaphore = xSemaphoreCreateBinary();
@@ -67,6 +68,7 @@ void I2CDriverInit(void)
         I2CTransaction.mutex = xSemaphoreCreateMutex();
     }
 
+        
     I2CMasterIntEnable(I2C2_BASE);
     IntEnable(INT_I2C2);
 }

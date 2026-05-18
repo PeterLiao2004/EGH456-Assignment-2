@@ -29,6 +29,8 @@
 #include "driverlib/fpu.h"
 #include "driverlib/timer.h"
 #include "utils/ustdlib.h"
+
+#include "drivers/i2c_driver.h"
 /*-----------------------------------------------------------*/
 
 /* Global for binary semaphore shared between tasks. */
@@ -36,8 +38,10 @@ SemaphoreHandle_t xFastTimerSemaphore = NULL;
 SemaphoreHandle_t xSlowTimerSemaphore = NULL;
 
 SemaphoreHandle_t xOpt3001ReadSemaphore = NULL;
+SemaphoreHandle_t xSHT31ReadSemaphore = NULL;
 
 SemaphoreHandle_t xOpt3001QueueDropMutex = NULL;
+SemaphoreHandle_t xSHT31QueueDropMutex = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware(void);
@@ -55,8 +59,10 @@ void sensor_main(void)
     xSlowTimerSemaphore = xSemaphoreCreateBinary();
 
     xOpt3001ReadSemaphore = xSemaphoreCreateBinary();
+    xSHT31ReadSemaphore = xSemaphoreCreateBinary();
     
     xOpt3001QueueDropMutex = xSemaphoreCreateMutex();
+    xSHT31QueueDropMutex = xSemaphoreCreateMutex();
 }
 
 /*-----------------------------------------------------------*/

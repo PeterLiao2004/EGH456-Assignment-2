@@ -27,6 +27,7 @@
 /* Sensor includes. */
 #include "drivers/i2c_driver.h"
 #include "drivers/opt3001.h"
+#include "drivers/sht31.h"
 
 #include "driverlib/uart.h"
 #include "driverlib/pin_map.h"
@@ -44,7 +45,7 @@
 /*----------------------------------------------------------- */
 // Define queue lengths for each sensor task
 #define opt3001QUEUE_LENGTH (5U) // 2Hz
-// #define tempHumQUEUE_LENGTH (3U) // 1Hz
+#define sht31QUEUE_LENGTH (3U)   // 1Hz
 // #define accelQUEUE_LENGTH (30U) // 100Hz
 // #define distQUEUE_LENGTH (10U) // 20Hz
 
@@ -61,23 +62,28 @@ extern SemaphoreHandle_t xFastTimerSemaphore;
 extern SemaphoreHandle_t xSlowTimerSemaphore;
 
 extern SemaphoreHandle_t xOpt3001ReadSemaphore;
+extern SemaphoreHandle_t xSHT31ReadSemaphore;
 
 extern SemaphoreHandle_t xOpt3001QueueDropMutex;
+extern SemaphoreHandle_t xSHT31QueueDropMutex;
 
 // Queues to hold data between tasks
 static QueueHandle_t xOpt3001Queue = NULL;
-
+static QueueHandle_t xSHT31Queue = NULL;
 // Called by app_tasks.c to create the sensor tasks
 void vCreateSensorTasks(void);
 
 // Tasks for sensors
+static void prvSensorInitTask(void *pvParameters);
 static void prvFastSchedulerTask(void *pvParameters);
 static void prvSlowSchedulerTask(void *pvParameters);
 static void prvOpt3001Task(void *pvParameters);
+static void prvSHT31Task(void *pvParameters);
 static void prvDisplayTask(void *pvParameters);
 
 // Hardware configuration functions
 static void prvConfigureOpt3001(void);
+static void prvConfigureSHT31(void);
 
 // Structs for passing data between tasks
 struct opt3001Data
@@ -87,10 +93,21 @@ struct opt3001Data
     float unfilteredLux;
     float filteredLux;
 };
+
+struct sht31Data
+{
+    uint32_t sequenceNum;
+    TickType_t timestamp;
+    float unfilteredTemp;
+    float unfilteredHumidity;
+    float filteredTemp;
+    float filteredHumidity;
+};
 /*----------------------------------------------------------- */
 // Filter sizes
 #define MAX_FILTER_SIZE (10U)    // max filter size for any sensor task (used for memory allocation of filter buffers)
 #define OPT3001_FILTER_SIZE (4U) // 4-sample moving average filter for OPT3001
+#define SHT31_FILTER_SIZE (3U)   // 3-sample moving average filter for SHT31
 
 // Create structure for moving average filter
 typedef struct
@@ -108,6 +125,8 @@ float MovingAverage_Update(MovingAverageFilter_t *filter, float newValue);
 
 // Declare filters
 MovingAverageFilter_t opt3001Filter;
+MovingAverageFilter_t sht31TempFilter;
+MovingAverageFilter_t sht31HumidityFilter;
 
 /*----------------------------------------------------------- */
 
@@ -123,33 +142,126 @@ void vCreateSensorTasks(void)
         return;
     }
 
-    xTaskCreate(prvFastSchedulerTask,
+    xSHT31Queue = xQueueCreate(sht31QUEUE_LENGTH, sizeof(struct sht31Data));
+    if (xSHT31Queue == NULL)
+    {
+        // Queue creation failed - handle error
+        xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+        UARTprintf("SHT31 Queue creation failed\n");
+        xSemaphoreGive(xUARTMutex);
+        return;
+    }
+
+    bool taskCreated;
+
+    taskCreated = xTaskCreate(prvSensorInitTask,
+                "SensorInit",
+                configMINIMAL_STACK_SIZE,
+                NULL,
+                tskIDLE_PRIORITY + 3,
+                NULL);
+    if (taskCreated != pdPASS)
+    {
+        UARTprintf("Sensor Init task creation failed\r\n");
+    } 
+
+    taskCreated = xTaskCreate(prvFastSchedulerTask,
                 "FastScheduler",
                 configMINIMAL_STACK_SIZE,
                 NULL,
                 tskIDLE_PRIORITY + 2,
                 NULL);
+    if (taskCreated != pdPASS)
+    {
+        UARTprintf("Fast Scheduler task creation failed\r\n");
+    }
 
-    xTaskCreate(prvSlowSchedulerTask,
+    taskCreated = xTaskCreate(prvSlowSchedulerTask,
                 "SlowScheduler",
                 configMINIMAL_STACK_SIZE,
                 NULL,
                 tskIDLE_PRIORITY + 2,
                 NULL);
+    if (taskCreated != pdPASS)
+    {
+        UARTprintf("Slow Scheduler task creation failed\r\n");
+    }
 
-    xTaskCreate(prvOpt3001Task,
+    taskCreated = xTaskCreate(prvOpt3001Task,
                 "Opt3001",
                 configMINIMAL_STACK_SIZE,
                 NULL,
                 tskIDLE_PRIORITY + 1,
                 NULL);
+    if (taskCreated != pdPASS)
+    {        
+        UARTprintf("Opt3001 task creation failed\r\n");
+    }
 
-    xTaskCreate(prvDisplayTask,
+    taskCreated = xTaskCreate(prvSHT31Task,
+                "SHT31",
+                configMINIMAL_STACK_SIZE,
+                NULL,
+                tskIDLE_PRIORITY + 1,
+                NULL);
+    if (taskCreated != pdPASS)
+    {        
+        UARTprintf("SHT31 task creation failed\r\n");
+    }
+
+    taskCreated = xTaskCreate(prvDisplayTask,
                 "Display",
                 configMINIMAL_STACK_SIZE,
                 NULL,
                 tskIDLE_PRIORITY + 1,
                 NULL);
+    if (taskCreated != pdPASS)
+    {        
+        UARTprintf("Display task creation failed\r\n");
+    }
+}
+
+/*----------------------------------------------------------- */
+static void prvSensorInitTask(void *pvParameters)
+{
+    // Short 2 second delay to allow the OPT3001 to power up before we attempt to configure it.
+    // vTaskDelay(pdMS_TO_TICKS(2000));
+
+    // The I2C2 peripheral must be enabled before use.
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C2);
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
+
+    // Wait until both peripherals are fully clocked before touching their
+    // registers. Skipping this causes intermittent failures on TM4C129x.
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_I2C2))
+    {
+    }
+    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPION))
+    {
+    }
+
+    // Configure the pin muxing for I2C0 functions on port N
+    // This step is not necessary if your part does not support pin muxing.
+    GPIOPinConfigure(GPIO_PN5_I2C2SCL);
+    GPIOPinConfigure(GPIO_PN4_I2C2SDA);
+
+    // Select the I2C function for these pins.  This function will also
+    // configure the GPIO pins pins for I2C operation, setting them to
+    // open-drain operation with weak pull-ups.  Consult the data sheet
+    // to see which functions are allocated per pin.
+    GPIOPinTypeI2CSCL(GPIO_PORTN_BASE, GPIO_PIN_5);
+    GPIOPinTypeI2C(GPIO_PORTN_BASE, GPIO_PIN_4);
+
+    I2CMasterInitExpClk(I2C2_BASE, SysCtlClockGet(), false);
+
+    // Initialize I2C driver
+    I2CDriverInit();
+
+    // Configure Sensors
+    prvConfigureOpt3001();
+    prvConfigureSHT31();
+
+    vTaskDelete(NULL); // delete self task after initialization
 }
 
 /*----------------------------------------------------------- */
@@ -206,7 +318,7 @@ static void prvSlowSchedulerTask(void *pvParameters)
             if (tick % 2 == 0)
             {
                 // Trigger 1Hz tasks
-                // Temperature and humidity task
+                xSemaphoreGive(xSHT31ReadSemaphore);
             }
 
             if (tick >= 2)
@@ -222,8 +334,6 @@ static void prvSlowSchedulerTask(void *pvParameters)
 
 static void prvOpt3001Task(void *pvParameters)
 {
-    prvConfigureOpt3001();
-
     bool success;
     struct opt3001Data xOpt3001Data;
 
@@ -268,29 +378,86 @@ static void prvOpt3001Task(void *pvParameters)
         }
     }
 }
+
+/*----------------------------------------------------------- */
+
+static void prvSHT31Task(void *pvParameters)
+{
+    bool success;
+    struct sht31Data xSHT31Data;
+
+    MovingAverage_Init(&sht31TempFilter, SHT31_FILTER_SIZE);
+    MovingAverage_Init(&sht31HumidityFilter, SHT31_FILTER_SIZE);
+
+    xSHT31Data.sequenceNum = 0U;
+    xSHT31Data.timestamp = 0U;
+    xSHT31Data.unfilteredTemp = 0.0f;
+    xSHT31Data.unfilteredHumidity = 0.0f;
+    xSHT31Data.filteredTemp = 0.0f;
+    xSHT31Data.filteredHumidity = 0.0f;
+
+    for (;;)
+    {
+        if (xSemaphoreTake(xSHT31ReadSemaphore, portMAX_DELAY) == pdPASS)
+        {
+            success = sensorSHT31Read(&xSHT31Data.unfilteredTemp, &xSHT31Data.unfilteredHumidity);
+            if (success)
+            {
+                xSHT31Data.sequenceNum++;
+                xSHT31Data.timestamp = xTaskGetTickCount();
+
+                // Update filter and get filtered values
+                xSHT31Data.filteredTemp = MovingAverage_Update(&sht31TempFilter, xSHT31Data.unfilteredTemp);
+                xSHT31Data.filteredHumidity = MovingAverage_Update(&sht31HumidityFilter, xSHT31Data.unfilteredHumidity);
+
+                // Send data to queue for display task
+                xSemaphoreTake(xSHT31QueueDropMutex, portMAX_DELAY);
+                if (uxQueueSpacesAvailable(xSHT31Queue) == 0)
+                {
+                    // Queue is full
+                    // Handle by removing oldest message in queue and adding new message
+                    struct sht31Data dummyData;
+                    xQueueReceive(xSHT31Queue, (void *)&dummyData, 0); // remove oldest message in queue
+                }
+                xQueueSend(xSHT31Queue, (void *)&xSHT31Data, 0); // add new message to queue
+                xSemaphoreGive(xSHT31QueueDropMutex);
+            }
+        }
+    }
+}
+
 /*----------------------------------------------------------- */
 
 void prvDisplayTask(void *pvParameters)
 {
     struct opt3001Data receivedOpt3001Data;
-    int32_t unfilteredLux_x100;
-    uint32_t filteredLux_x100;
+    struct sht31Data receivedSHT31Data;
 
     for (;;)
     {
         if (xQueueReceive(xOpt3001Queue, (void *)&receivedOpt3001Data, portMAX_DELAY) == pdPASS)
         {
-            unfilteredLux_x100 = (int32_t)(receivedOpt3001Data.unfilteredLux * 100.0f);
-            filteredLux_x100 = (uint32_t)(receivedOpt3001Data.filteredLux * 100.0f);
-
             xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-            UARTprintf("Seq Num: %5d | Timestamp: %5d | Unfiltered Lux: %5d.%02d | Filtered Lux: %5d.%02d\n",
-                       receivedOpt3001Data.sequenceNum,
-                       receivedOpt3001Data.timestamp,
-                       unfilteredLux_x100 / 100,
-                       unfilteredLux_x100 % 100,
-                       filteredLux_x100 / 100,
-                       filteredLux_x100 % 100);
+            UARTprintf("OPT3001: UF Lux %5d.%02d, F Lux %5d.%02d\n",
+                       (int32_t)receivedOpt3001Data.unfilteredLux,
+                       (int32_t)(receivedOpt3001Data.unfilteredLux * 100) % 100,
+                       (int32_t)receivedOpt3001Data.filteredLux,
+                       (int32_t)(receivedOpt3001Data.filteredLux * 100) % 100);
+            xSemaphoreGive(xUARTMutex);
+        }
+
+        if (xQueueReceive(xSHT31Queue, (void *)&receivedSHT31Data, 0) == pdPASS)
+        {
+            xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+            UARTprintf("SHT31: UF Temp %3d.%02dC, UF Humidity %3d.%02d%% | F Temp %3d.%02dC, F Humidity %3d.%02d%%\n",
+                       (int32_t)receivedSHT31Data.unfilteredTemp,
+                       (int32_t)(receivedSHT31Data.unfilteredTemp * 100) % 100,
+                       (int32_t)receivedSHT31Data.unfilteredHumidity,
+                       (int32_t)(receivedSHT31Data.unfilteredHumidity * 100) % 100,
+                       (int32_t)receivedSHT31Data.filteredTemp,
+                       (int32_t)(receivedSHT31Data.filteredTemp * 100) % 100,
+                       (int32_t)receivedSHT31Data.filteredHumidity,
+                       (int32_t)(receivedSHT31Data.filteredHumidity * 100) % 100);
             xSemaphoreGive(xUARTMutex);
         }
     }
@@ -388,64 +555,10 @@ static void prvConfigureOpt3001(void)
 {
     bool success;
 
-    // Short 2 second delay to allow the OPT3001 to power up before we attempt to configure it.
-    // SysCtlDelay(2 * g_ui32SysClock);
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    //
-    // Clear the terminal and print the welcome message.
-    //
-    // xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-    // UARTprintf("OPT3001 Example\n");
-    // xSemaphoreGive(xUARTMutex);
-
-    //
-    // The I2C2 peripheral must be enabled before use.
-    //
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C2);
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_GPION);
-
-    // Wait until both peripherals are fully clocked before touching their
-    // registers. Skipping this causes intermittent failures on TM4C129x.
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_I2C2))
-    {
-    }
-    while (!SysCtlPeripheralReady(SYSCTL_PERIPH_GPION))
-    {
-    }
-
-    //
-    // Configure the pin muxing for I2C0 functions on port N
-    // This step is not necessary if your part does not support pin muxing.
-    //
-    GPIOPinConfigure(GPIO_PN5_I2C2SCL);
-    GPIOPinConfigure(GPIO_PN4_I2C2SDA);
-
-    //
-    // Select the I2C function for these pins.  This function will also
-    // configure the GPIO pins pins for I2C operation, setting them to
-    // open-drain operation with weak pull-ups.  Consult the data sheet
-    // to see which functions are allocated per pin.
-    //
-    GPIOPinTypeI2CSCL(GPIO_PORTN_BASE, GPIO_PIN_5);
-    GPIOPinTypeI2C(GPIO_PORTN_BASE, GPIO_PIN_4);
-
-    I2CMasterInitExpClk(I2C2_BASE, SysCtlClockGet(), false);
-
-    I2CDriverInit(); // create semaphore + enable I2C interrupt
-
-    //
-    // Enable interrupts to the processor.
-    //
-    // IntMasterEnable();
-
     // Initialise sensor
     sensorOpt3001Init();
 
-    // Test that sensor is set up correctly
-    // xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-    // UARTprintf("Testing OPT3001 Sensor:\n");
-    // xSemaphoreGive(xUARTMutex);
+
     success = sensorOpt3001Test();
 
     // If the test fails, retry the full init + test sequence rather than
@@ -459,10 +572,26 @@ static void prvConfigureOpt3001(void)
         sensorOpt3001Init();
         success = sensorOpt3001Test();
     }
+}
 
-    // xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-    // UARTprintf("All Tests Passed!\n\n");
-    // xSemaphoreGive(xUARTMutex);
+/*----------------------------------------------------------- */
+
+static void prvConfigureSHT31(void)
+{
+    bool success;
+
+    success = sensorSHT31Test();
+
+    while (!success)
+    {
+        xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+        UARTprintf("SHT31 test failed\n");
+        xSemaphoreGive(xUARTMutex);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        success = sensorSHT31Test();
+    }
 }
 
 /*----------------------------------------------------------- */
