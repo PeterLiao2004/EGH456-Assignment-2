@@ -43,7 +43,10 @@
 
 #include "grlib.h"
 #include "drivers/Kentec320x240x16_ssd2119_spi.h"
-// #include "drivers/touch.h"
+#include "drivers/touch.h"
+#include "widget.h"
+#include "canvas.h"
+#include "pushbutton.h"
 
 /*-----------------------------------------------------------*/
 #define mainQUEUE_LENGTH (4U)
@@ -67,6 +70,9 @@ extern void i2cOptDriverInit(void);
 volatile uint32_t g_ui32TimeStamp = 0;
 volatile static uint32_t g_pui32ButtonPressed = 0;
 
+static volatile UiPage_t g_currentPage = UI_PAGE_MOTOR;
+static volatile bool g_pageChanged = true;
+
 extern SemaphoreHandle_t xSW1Semaphore;
 extern SemaphoreHandle_t xSW2Semaphore;
 extern SemaphoreHandle_t xUARTMutex;
@@ -81,10 +87,60 @@ static void prvTaskSW1(void *pvParameters);
 static void prvTaskSW2(void *pvParameters);
 static void prvDisplayTask(void *pvParameters);
 static void vFormatTimeFromTicks(TickType_t startTick, char *timeString);
+// pages plot
+static void OnMotorPageButton(tWidget *psWidget);
+static void OnPlotPageButton(tWidget *psWidget);
+static void prvDrawMotorPage(tContext *psContext, SystemStatus_t *latestSystemStatus);
+static void prvDrawPlotPageBase(tContext *psContext);
 
 void vCreateUiTasks(void);
 
 static void prvConfigureButton(void);
+
+// two buttons
+RectangularButton(g_sMotorPageButton,
+                  0,
+                  0,
+                  0,
+                  &g_sKentec320x240x16_SSD2119,
+                  0,
+                  200,
+                  155,
+                  40,
+                  PB_STYLE_FILL | PB_STYLE_OUTLINE | PB_STYLE_TEXT,
+                  ClrDarkBlue,
+                  ClrBlack,
+                  ClrWhite,
+                  ClrWhite,
+                  &g_sFontFixed6x8,
+                  "Motor",
+                  0,
+                  0,
+                  0,
+                  0,
+                  OnMotorPageButton);
+
+RectangularButton(g_sPlotPageButton,
+                  0,
+                  0,
+                  0,
+                  &g_sKentec320x240x16_SSD2119,
+                  165,
+                  200,
+                  155,
+                  40,
+                  PB_STYLE_FILL | PB_STYLE_OUTLINE | PB_STYLE_TEXT,
+                  ClrDarkBlue,
+                  ClrBlack,
+                  ClrWhite,
+                  ClrWhite,
+                  &g_sFontFixed6x8,
+                  "Plot",
+                  0,
+                  0,
+                  0,
+                  0,
+                  OnPlotPageButton);
 
 typedef struct
 {
@@ -164,6 +220,14 @@ typedef struct
     UiThresholds_t thresholds;
 } UiCommand_t;
 
+// pages
+typedef enum
+{
+    UI_PAGE_MOTOR = 0,
+    UI_PAGE_PLOT,
+    UI_PAGE_COUNT
+} UiPage_t;
+
 /*-----------------------------------------------------------*/
 
 void vCreateUiTasks(void)
@@ -240,7 +304,7 @@ void vCreateUiTasks(void)
 
     taskCreated = xTaskCreate(prvDisplayTask,
                               "Display",
-                              2048,
+                              1024,
                               NULL,
                               tskIDLE_PRIORITY + 1,
                               NULL);
@@ -361,6 +425,71 @@ static void vFormatTimeFromTicks(TickType_t startTick, char *timeString)
              seconds,
              isPM ? "PM" : "AM");
 }
+
+/*-----------------------------------------------------------*/
+
+static void OnMotorPageButton(tWidget *psWidget)
+{
+    g_currentPage = UI_PAGE_MOTOR;
+    g_pageChanged = true;
+}
+
+static void OnPlotPageButton(tWidget *psWidget)
+{
+    g_currentPage = UI_PAGE_PLOT;
+    g_pageChanged = true;
+}
+
+/*-----------------------------------------------------------*/
+
+static void prvDrawMotorPage(tContext *psContext, SystemStatus_t *latestSystemStatus)
+{
+    tRectangle pageArea = {0, 40, 319, 199};
+
+    GrContextForegroundSet(psContext, ClrBlack);
+    GrRectFill(psContext, &pageArea);
+
+    GrContextForegroundSet(psContext, ClrWhite);
+
+    GrStringDrawCentered(psContext,
+                         "MOTOR / RPM PAGE",
+                         -1,
+                         160,
+                         60,
+                         false);
+
+    GrStringDrawCentered(psContext,
+                         "RPM slider goes here",
+                         -1,
+                         160,
+                         90,
+                         false);
+
+    GrStringDrawCentered(psContext,
+                         pcMotorStateToString(latestSystemStatus->motorState),
+                         -1,
+                         160,
+                         120,
+                         false);
+}
+
+static void prvDrawPlotPageBase(tContext *psContext)
+{
+    tRectangle pageArea = {0, 40, 319, 199};
+
+    GrContextForegroundSet(psContext, ClrBlack);
+    GrRectFill(psContext, &pageArea);
+
+    GrContextForegroundSet(psContext, ClrWhite);
+
+    GrStringDrawCentered(psContext,
+                         "SENSOR PLOT PAGE",
+                         -1,
+                         160,
+                         45,
+                         false);
+}
+
 /*-----------------------------------------------------------*/
 
 static void prvDisplayTask(void *pvParameters)
@@ -382,13 +511,15 @@ static void prvDisplayTask(void *pvParameters)
     latestSystemStatus.desiredRPM = 0.0f;
     latestSystemStatus.motorPower = 0.0f;
 
+    UiPage_t lastPage = UI_PAGE_COUNT;
+
     tRectangle screenRect = {0, 0, 319, 239};
 
     // Top 40 pixels reserved for motor state/header
     tRectangle topArea = {0, 0, 319, 39};
 
     // Graph starts below the top area
-    tRectangle graphArea = {0, 40, 319, 239};
+    tRectangle graphArea = {0, 40, 319, 199};
 
     char line1[40];
 
@@ -405,7 +536,7 @@ static void prvDisplayTask(void *pvParameters)
     int rawY;
 
     int graphTop = 50;      // leave small gap under header
-    int graphBottom = 220;  // bottom of graph
+    int graphBottom = 190;  // bottom of graph
     int graphHeight = graphBottom - graphTop;
 
     float luxMax = 100.0f;  // change this if your lux range is bigger
@@ -416,16 +547,49 @@ static void prvDisplayTask(void *pvParameters)
     Kentec320x240x16_SSD2119Init(configCPU_CLOCK_HZ);
     GrContextInit(&sContext, &g_sKentec320x240x16_SSD2119);
     GrContextFontSet(&sContext, &g_sFontFixed6x8);
+    //Touchscreen draw buttons
+    TouchScreenInit(configCPU_CLOCK_HZ);
+    TouchScreenCallbackSet(WidgetPointerMessage);
+
+    WidgetAdd(WIDGET_ROOT, (tWidget *)&g_sMotorPageButton);
+    WidgetAdd(WIDGET_ROOT, (tWidget *)&g_sPlotPageButton);
 
     // Clear whole screen
     GrContextForegroundSet(&sContext, ClrBlack);
     GrRectFill(&sContext, &screenRect);
+    //redraw buttons
+    WidgetPaint(WIDGET_ROOT);
 
     clockStartTick = xTaskGetTickCount();
     lastClockUpdateTick = clockStartTick;
 
     for (;;)
     {
+        WidgetMessageQueueProcess(); // responds to button being pressed
+
+        if ((g_pageChanged) || (lastPage != g_currentPage))
+        {
+            g_pageChanged = false;
+            lastPage = g_currentPage;
+
+            if (g_currentPage == UI_PAGE_MOTOR)
+            {
+                prvDrawMotorPage(&sContext, &latestSystemStatus);
+                WidgetPaint(WIDGET_ROOT);
+            }
+            else if (g_currentPage == UI_PAGE_PLOT)
+            {
+                prvDrawPlotPageBase(&sContext);
+
+                x = 20;
+                lastRawY = graphBottom;
+                lastFilteredY = graphBottom;
+            }
+
+            WidgetPaint(WIDGET_ROOT);
+            redrawHeader = true;
+        }
+
         if ((xTaskGetTickCount() - lastClockUpdateTick) >= pdMS_TO_TICKS(1000))
         {
             lastClockUpdateTick = xTaskGetTickCount();
@@ -513,7 +677,7 @@ static void prvDisplayTask(void *pvParameters)
                 GrStringDraw(&sContext, "Day", -1, 5, 8, false);
             }
 
-            if (haveSensorData)
+            if (haveSensorData && g_currentPage == UI_PAGE_PLOT)
             {
                 usprintf(line1, "L:%d T:%d H:%d D:%d",
                         (int)latestSensorData.luxFiltered,
@@ -532,7 +696,7 @@ static void prvDisplayTask(void *pvParameters)
             redrawHeader = false;
         }
 
-        if (haveSensorData)
+        if (haveSensorData && g_currentPage == UI_PAGE_PLOT)
         {
             // Convert lux values into screen y-coordinates
             filteredY = graphBottom -
