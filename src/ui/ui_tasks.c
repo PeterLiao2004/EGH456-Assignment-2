@@ -77,7 +77,7 @@ extern SemaphoreHandle_t xSW2Semaphore;
 extern SemaphoreHandle_t xUARTMutex;
 extern SemaphoreHandle_t xQueueDroppingMutex;
 
-QueueHandle_t xSensorQueue = NULL; // sensor data -> UI
+QueueHandle_t xOpt3001Queue = NULL; // OPT3001 data -> UI
 QueueHandle_t xSystemStatusQueue = NULL; // motor/control data -> UI
 QueueHandle_t xUiCommandQueue = NULL; // UI data -> motor/control
 static EventGroupHandle_t xSensorEventGroup = NULL;
@@ -231,8 +231,8 @@ void vCreateUiTasks(void)
         return;
     }
 
-    xSensorQueue = xQueueCreate(mainQUEUE_LENGTH, sizeof(SensorData_t));
-    if (xSensorQueue == NULL)
+    xOpt3001Queue = xQueueCreate(mainQUEUE_LENGTH, sizeof(Opt3001Data_t));
+    if (xOpt3001Queue == NULL)
     {
         if (xSemaphoreTake(xUARTMutex, portMAX_DELAY))
         {
@@ -478,8 +478,8 @@ static void prvDrawPlotPageBase(tContext *psContext)
 
 static void prvDisplayTask(void *pvParameters)
 {
-    SensorData_t receivedSensorData;
-    SensorData_t latestSensorData;
+    Opt3001Data_t receivedOpt3001Data;
+    Opt3001Data_t latestOpt3001Data;
 
     SystemStatus_t receivedSystemStatus;
     SystemStatus_t latestSystemStatus;
@@ -580,24 +580,24 @@ static void prvDisplayTask(void *pvParameters)
             redrawHeader = true;
         }
 
-        if (xQueueReceive(xSensorQueue,
-                          (void *)&receivedSensorData,
+        if (xQueueReceive(xOpt3001Queue,
+                          (void *)&receivedOpt3001Data,
                           mainQUEUE_RECEIVE_TICKS_TO_WAIT) == pdPASS)
         {
-            latestSensorData = receivedSensorData;
+            latestOpt3001Data = receivedOpt3001Data;
             haveSensorData = true;
             redrawHeader = true;
 
             xSemaphoreTake(xUARTMutex, portMAX_DELAY);
             UARTprintf("Seq:%u Time:%u Lux Raw:%d Lux Filt:%d Temp:%d Hum:%d Acc:%d Dist:%d\r\n",
-                    receivedSensorData.sequenceNum,
-                    receivedSensorData.timestamp,
-                    (int)receivedSensorData.luxRaw,
-                    (int)receivedSensorData.luxFiltered,
-                    (int)receivedSensorData.temperatureC,
-                    (int)receivedSensorData.humidityRH,
-                    (int)receivedSensorData.accelerationFiltered,
-                    (int)receivedSensorData.distanceCm);
+                    receivedOpt3001Data.sequenceNum,
+                    receivedOpt3001Data.timestamp,
+                    (int)receivedOpt3001Data.luxRaw,
+                    (int)receivedOpt3001Data.luxFiltered,
+                    (int)receivedOpt3001Data.temperatureC,
+                    (int)receivedOpt3001Data.humidityRH,
+                    (int)receivedOpt3001Data.accelerationFiltered,
+                    (int)receivedOpt3001Data.distanceCm);
             xSemaphoreGive(xUARTMutex);
         }
 
@@ -664,10 +664,10 @@ static void prvDisplayTask(void *pvParameters)
             if (haveSensorData && g_currentPage == UI_PAGE_PLOT)
             {
                 usprintf(line1, "L:%d T:%d H:%d D:%d",
-                        (int)latestSensorData.luxFiltered,
-                        (int)latestSensorData.temperatureC,
-                        (int)latestSensorData.humidityRH,
-                        (int)latestSensorData.distanceCm);
+                        (int)latestOpt3001Data.luxFiltered,
+                        (int)latestOpt3001Data.temperatureC,
+                        (int)latestOpt3001Data.humidityRH,
+                        (int)latestOpt3001Data.distanceCm);
 
                 GrStringDrawCentered(&sContext,
                                      line1,
@@ -684,10 +684,10 @@ static void prvDisplayTask(void *pvParameters)
         {
             // Convert lux values into screen y-coordinates
             filteredY = graphBottom -
-                        (int)((latestSensorData.luxFiltered / luxMax) * graphHeight);
+                        (int)((latestOpt3001Data.luxFiltered / luxMax) * graphHeight);
 
             rawY = graphBottom -
-                (int)((latestSensorData.luxRaw / luxMax) * graphHeight);
+                (int)((latestOpt3001Data.luxRaw / luxMax) * graphHeight);
 
             // Clamp filtered value inside graph area
             if (filteredY < graphTop)

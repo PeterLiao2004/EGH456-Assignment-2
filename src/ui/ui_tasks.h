@@ -19,9 +19,9 @@ typedef struct
     float accelerationFiltered;
 
     float distanceCm;
-} SensorData_t;
+} Opt3001Data_t;
 
-extern QueueHandle_t xSensorQueue;
+extern QueueHandle_t xOpt3001Queue;
 
 void vCreateUiTasks(void);
 

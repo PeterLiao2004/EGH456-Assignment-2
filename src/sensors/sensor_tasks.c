@@ -43,13 +43,6 @@
 #include "sensor_tasks.h"
 
 /*----------------------------------------------------------- */
-// Define queue lengths for each sensor task
-#define opt3001QUEUE_LENGTH (5U) // 2Hz
-// #define tempHumQUEUE_LENGTH (3U) // 1Hz
-// #define accelQUEUE_LENGTH (30U) // 100Hz
-// #define distQUEUE_LENGTH (10U) // 20Hz
-
-/*----------------------------------------------------------- */
 // Sysclock from main.c
 extern volatile uint32_t g_ui32SysClock;
 
@@ -63,11 +56,6 @@ extern SemaphoreHandle_t xSlowTimerSemaphore;
 
 extern SemaphoreHandle_t xOpt3001ReadSemaphore;
 
-extern SemaphoreHandle_t xOpt3001QueueDropMutex;
-
-// Queues to hold data between tasks
-static QueueHandle_t xOpt3001Queue = NULL;
-
 // Called by app_tasks.c to create the sensor tasks
 void vCreateSensorTasks(void);
 
@@ -75,19 +63,10 @@ void vCreateSensorTasks(void);
 static void prvFastSchedulerTask(void *pvParameters);
 static void prvSlowSchedulerTask(void *pvParameters);
 static void prvOpt3001Task(void *pvParameters);
-static void prvDisplayTask(void *pvParameters);
 
 // Hardware configuration functions
 static void prvConfigureOpt3001(void);
 
-// Structs for passing data between tasks
-struct opt3001Data
-{
-    uint32_t sequenceNum;
-    TickType_t timestamp;
-    float unfilteredLux;
-    float filteredLux;
-};
 /*----------------------------------------------------------- */
 // Filter sizes
 #define MAX_FILTER_SIZE (10U)    // max filter size for any sensor task (used for memory allocation of filter buffers)
@@ -114,16 +93,6 @@ MovingAverageFilter_t opt3001Filter;
 
 void vCreateSensorTasks(void)
 {
-    xOpt3001Queue = xQueueCreate(opt3001QUEUE_LENGTH, sizeof(struct opt3001Data));
-    if (xOpt3001Queue == NULL)
-    {
-        // Queue creation failed - handle error
-        xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-        UARTprintf("Opt3001 Queue creation failed\n");
-        xSemaphoreGive(xUARTMutex);
-        return;
-    }
-
     xTaskCreate(prvFastSchedulerTask,
                 "FastScheduler",
                 configMINIMAL_STACK_SIZE,
@@ -140,13 +109,6 @@ void vCreateSensorTasks(void)
 
     xTaskCreate(prvOpt3001Task,
                 "Opt3001",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
-
-    xTaskCreate(prvDisplayTask,
-                "Display",
                 configMINIMAL_STACK_SIZE,
                 NULL,
                 tskIDLE_PRIORITY + 1,
@@ -226,16 +188,20 @@ static void prvOpt3001Task(void *pvParameters)
     prvConfigureOpt3001();
 
     bool success;
-    struct opt3001Data xOpt3001Data;
+    Opt3001Data_t opt3001Data;
 
     // Initialise filter
     MovingAverage_Init(&opt3001Filter, OPT3001_FILTER_SIZE);
 
-    xOpt3001Data.sequenceNum = 0U;
-    xOpt3001Data.timestamp = 0U;
+    opt3001Data.sequenceNum = 0U;
+    opt3001Data.timestamp = 0U;
     uint16_t rawData = 0U;
-    xOpt3001Data.unfilteredLux = 0U;
-    xOpt3001Data.filteredLux = 0U;
+    opt3001Data.luxRaw = 0.0f;
+    opt3001Data.luxFiltered = 0.0f;
+    opt3001Data.temperatureC = 0.0f;
+    opt3001Data.humidityRH = 0.0f;
+    opt3001Data.accelerationFiltered = 0.0f;
+    opt3001Data.distanceCm = 0.0f;
 
     for (;;)
     {
@@ -246,69 +212,19 @@ static void prvOpt3001Task(void *pvParameters)
 
             if (success)
             {
-                xOpt3001Data.sequenceNum++;
-                xOpt3001Data.timestamp = xTaskGetTickCount();
+                opt3001Data.sequenceNum++;
+                opt3001Data.timestamp = xTaskGetTickCount();
 
-                sensorOpt3001Convert(rawData, &xOpt3001Data.unfilteredLux);
+                sensorOpt3001Convert(rawData, &opt3001Data.luxRaw);
 
                 // Update filter and get filtered value
-                xOpt3001Data.filteredLux = MovingAverage_Update(&opt3001Filter, xOpt3001Data.unfilteredLux);
+                opt3001Data.luxFiltered = MovingAverage_Update(&opt3001Filter, opt3001Data.luxRaw);
 
-                SensorData_t uiSensorData;
-
-                uiSensorData.sequenceNum = xOpt3001Data.sequenceNum;
-                uiSensorData.timestamp = xOpt3001Data.timestamp;
-                uiSensorData.luxRaw = xOpt3001Data.unfilteredLux;
-                uiSensorData.luxFiltered = xOpt3001Data.filteredLux;
-
-                uiSensorData.temperatureC = 0.0f;
-                uiSensorData.humidityRH = 0.0f;
-                uiSensorData.accelerationFiltered = 0.0f;
-                uiSensorData.distanceCm = 0.0f;
-
-                if (xSensorQueue != NULL)
+                if (xOpt3001Queue != NULL)
                 {
-                    xQueueSend(xSensorQueue, &uiSensorData, 0);
+                    xQueueSend(xOpt3001Queue, &opt3001Data, 0);
                 }
-                // Send data to queue for display task
-                xSemaphoreTake(xOpt3001QueueDropMutex, portMAX_DELAY);
-                if (uxQueueSpacesAvailable(xOpt3001Queue) == 0)
-                {
-                    // Queue is full
-                    // Handle by removing oldest message in queue and adding new message
-                    struct opt3001Data dummyData;
-                    xQueueReceive(xOpt3001Queue, (void *)&dummyData, 0); // remove oldest message in queue
-                }
-                xQueueSend(xOpt3001Queue, (void *)&xOpt3001Data, 0); // add new message to queue
-                xSemaphoreGive(xOpt3001QueueDropMutex);
             }
-        }
-    }
-}
-/*----------------------------------------------------------- */
-
-void prvDisplayTask(void *pvParameters)
-{
-    struct opt3001Data receivedOpt3001Data;
-    int32_t unfilteredLux_x100;
-    uint32_t filteredLux_x100;
-
-    for (;;)
-    {
-        if (xQueueReceive(xOpt3001Queue, (void *)&receivedOpt3001Data, portMAX_DELAY) == pdPASS)
-        {
-            unfilteredLux_x100 = (int32_t)(receivedOpt3001Data.unfilteredLux * 100.0f);
-            filteredLux_x100 = (uint32_t)(receivedOpt3001Data.filteredLux * 100.0f);
-
-            xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-            UARTprintf("Seq Num: %5d | Timestamp: %5d | Unfiltered Lux: %5d.%02d | Filtered Lux: %5d.%02d\n",
-                       receivedOpt3001Data.sequenceNum,
-                       receivedOpt3001Data.timestamp,
-                       unfilteredLux_x100 / 100,
-                       unfilteredLux_x100 % 100,
-                       filteredLux_x100 / 100,
-                       filteredLux_x100 % 100);
-            xSemaphoreGive(xUARTMutex);
         }
     }
 }
