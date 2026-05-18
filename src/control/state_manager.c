@@ -18,12 +18,16 @@
 #include "system_state.h"
 #include "system_events.h"
 #include "motor/motor_tasks.h"
+#include "debug/debug_log.h"
 
 /** @brief State manager task stack size. */
 #define STATE_MANAGER_STACK_SIZE    (configMINIMAL_STACK_SIZE * 2)
 
 /** @brief State manager task priority (above motor task at +2). */
 #define STATE_MANAGER_PRIORITY      (tskIDLE_PRIORITY + 3)
+
+#define SAFE_START_RPM             400U
+#define HALL_VALID_EDGE_COUNT      12U
 
 //Private state variables
 static SemaphoreHandle_t s_stateMutex;
@@ -33,6 +37,8 @@ static uint32_t s_desiredSpeed;
 
 
 static void prvStateManagerTask(void *pvParameters);
+static void prvSetState(SystemState_t newState);
+static const char *prvStateToString(SystemState_t state);
 
 void vCreateStateManagerTasks(void)
 {
@@ -54,54 +60,94 @@ static void prvStateManagerTask(void *pvParameters)
     for (;;)
     {
         EventBits_t fired = xEventGroupWaitBits(
-            s_events,                                      // 1
-            EVENT_START | EVENT_E_STOP | EVENT_FAULT_ACK,  // 2
-            pdTRUE,                                        // 3
-            pdFALSE,                                       // 4
-            pdMS_TO_TICKS(20)                              // 5
+            s_events,                                      
+            EVENT_START | EVENT_E_STOP | EVENT_FAULT_ACK,  
+            pdTRUE,                                        
+            pdFALSE,                                       
+            pdMS_TO_TICKS(20)                              
         );
 
-        if ((fired & EVENT_START) != 0U)
+        if (((fired & EVENT_E_STOP) != 0U) &&
+            (s_state != SYSTEM_STATE_ESTOP_BRAKING) &&
+            (s_state != SYSTEM_STATE_FAULT_LATCHED))
         {
-            s_state = SYSTEM_STATE_STARTING;
-            UARTprintf("EVENT_START received\r\n");
-            Motor_Start(400U);
+            prvSetState(SYSTEM_STATE_ESTOP_BRAKING);
+            DebugPrintf(DBG_STATE "EVENT_E_STOP received\r\n");
+            Motor_EStop();
         }
 
         switch (s_state)
         {
             case SYSTEM_STATE_STOPPED:
-                UARTprintf("State Manager in STOPPED state\r\n");
-                if (fired & EVENT_START)
+                if ((fired & EVENT_START) != 0U)
                 {
-                    s_state = SYSTEM_STATE_STARTING;
-                    UARTprintf("EVENT_START received\r\n");
+                    prvSetState(SYSTEM_STATE_STARTING);
+                    DebugPrintf(DBG_STATE "EVENT_START received\r\n");
+                    Motor_Start(SAFE_START_RPM);
                 }
-                // Wait for a start command from the UI or serial input
-                // (not implemented yet)
                 break;
+
             case SYSTEM_STATE_STARTING:
-                UARTprintf("State Manager in STARTING state\r\n");
-                // Ramp up the motor and wait for valid hall feedback
+                if (Motor_GetHallEdgeCount() >= HALL_VALID_EDGE_COUNT)
+                {
+                    prvSetState(SYSTEM_STATE_RUNNING);
+                    DebugPrintf(DBG_STATE "Hall feedback valid, motor RUNNING\r\n");
+                }
                 break;
+
             case SYSTEM_STATE_RUNNING:
-                UARTprintf("State Manager in RUNNING state\r\n");
-                // Monitor for stop or e-stop commands
-                // Normal operation. Monitor for stop or e-stop commands.
                 break;
+
             case SYSTEM_STATE_ESTOP_BRAKING:
-                UARTprintf("State Manager in E-STOP BRAKING state\r\n");
-                // Wait for the motor to come to rest, then transition to FAULT_LATCHED
+                if (Motor_HasReachedZero())
+                {
+                    Motor_Disable();
+                    prvSetState(SYSTEM_STATE_FAULT_LATCHED);
+                    DebugPrintf(DBG_STATE "Motor stopped, FAULT LATCHED\r\n");
+                }
                 break;
+
             case SYSTEM_STATE_FAULT_LATCHED:
-                UARTprintf("State Manager in FAULT LATCHED state\r\n");
-                // Wait for a reset command from the UI or serial input
+                if ((fired & EVENT_FAULT_ACK) != 0U)
+                {
+                    prvSetState(SYSTEM_STATE_STOPPED);
+                    DebugPrintf(DBG_STATE "FAULT_ACK received, STOPPED\r\n");
+                }
                 break;
+
             default:
                 // Invalid state - should never happen
                 break;
         }
         // vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+static void prvSetState(SystemState_t newState)
+{
+    if (s_state != newState)
+    {
+        s_state = newState;
+        DebugPrintf(DBG_STATE "State Manager: %s\r\n", prvStateToString(newState));
+    }
+}
+
+static const char *prvStateToString(SystemState_t state)
+{
+    switch (state)
+    {
+        case SYSTEM_STATE_STOPPED:
+            return "STOPPED";
+        case SYSTEM_STATE_STARTING:
+            return "STARTING";
+        case SYSTEM_STATE_RUNNING:
+            return "RUNNING";
+        case SYSTEM_STATE_ESTOP_BRAKING:
+            return "E-STOP BRAKING";
+        case SYSTEM_STATE_FAULT_LATCHED:
+            return "FAULT LATCHED";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -112,7 +158,7 @@ void StateManager_Init(void)
     s_events     = xEventGroupCreate();
     s_state      = SYSTEM_STATE_STOPPED;
     s_desiredSpeed = 0U;
-    UARTprintf("State Manager initialised\r\n");
+    DebugPrintf(DBG_INIT "State Manager initialised\r\n");
 }
 
 void StateManager_TriggerStart(void)
@@ -129,4 +175,37 @@ void StateManager_TriggerEStop(void)
     {
         xEventGroupSetBits(s_events, EVENT_E_STOP);
     }
+}
+
+void StateManager_TriggerFaultAck(void)
+{
+    if (s_events != NULL)
+    {
+        xEventGroupSetBits(s_events, EVENT_FAULT_ACK);
+    }
+}
+
+
+SystemState_t StateManager_GetState(void)
+{
+    SystemState_t state;
+
+    if (s_stateMutex != NULL)
+    {
+        xSemaphoreTake(s_stateMutex, portMAX_DELAY);
+    }
+
+    state = s_state;
+
+    if (s_stateMutex != NULL)
+    {
+        xSemaphoreGive(s_stateMutex);
+    }
+
+    return state;
+}
+
+const char *StateManager_GetStateString(void)
+{
+    return prvStateToString(StateManager_GetState());
 }

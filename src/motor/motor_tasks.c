@@ -10,12 +10,11 @@
  *     Motor_Start(initial_rpm)  ->  enable + kick + ramp at NORMAL rate
  *     Motor_SetSpeed(rpm)       ->  change target, NORMAL ramp rate
  *     Motor_Stop()              ->  ramp to 0 at NORMAL rate
- *     Motor_EStop()             ->  ramp to 0 at EMERGENCY rate
+ *     Motor_EStop()             ->  immediate PWM cut, clear reference + integral
  *     Motor_Disable()           ->  immediate output disable, clear state
  *
- * Internally the motor task owns two ramp constants (NORMAL_RAMP_RPM_PER_S
- * and ESTOP_RAMP_RPM_PER_S) and selects between them based on the most
- * recent intent. The state manager never sees these values.
+ * Internally the motor task owns NORMAL_RAMP_RPM_PER_S for ramp-based
+ * transitions. The state manager never sees this value.
  *
  * RTOS structure:
  *   - prvMotorTask runs periodically at MOTOR_CONTROL_PERIOD_MS (5 ms).
@@ -52,7 +51,7 @@
 #include "driverlib/pwm.h"
 #include "drivers/rtos_hw_drivers.h"
 #include "utils/uartstdio.h"
-
+#include "debug/debug_log.h"
 /* Motor library include. */
 #include "motorlib.h"
 
@@ -102,12 +101,8 @@ static int32_t  prvClampInt32(int32_t value,
 #define MOTOR_DUTY_MIN          1U
 #define MOTOR_DUTY_MAX          49U
 
-/* --- Ramp rates (RPM per second) ---
- * NORMAL is used for Motor_Start / Motor_SetSpeed / Motor_Stop.
- * ESTOP is used for Motor_EStop only.
- */
+/* Ramp rate in RPM/s used for Motor_Start / Motor_SetSpeed / Motor_Stop. */
 #define NORMAL_RAMP_RPM_PER_S   500U
-#define ESTOP_RAMP_RPM_PER_S    1000U
 
 /* --- PI controller --- */
 #define PI_SCALE                1000L
@@ -485,11 +480,13 @@ void Motor_Start(uint32_t initial_rpm)
     /* Configure setpoints under critical section so they take effect together. */
     taskENTER_CRITICAL();
     g_targetRpm      = initial_rpm;
+    g_referenceRpm   = initial_rpm;
     g_activeRampRate = NORMAL_RAMP_RPM_PER_S;
     g_piIntegral     = 0;
     g_outputsEnabled = true;
     taskEXIT_CRITICAL();
-
+    DebugPrintf(DBG_MOTOR "Motor_Start called with initial RPM %u\r\n",
+                initial_rpm);
     /* Enable hardware and kick commutation. */
     enableMotor();
     setDuty(10);
@@ -501,6 +498,7 @@ void Motor_Start(uint32_t initial_rpm)
 
 void Motor_SetSpeed(uint32_t rpm)
 {
+    DebugPrintf(DBG_MOTOR "Setting motor speed to %u RPM\r\n", rpm);
     if (!g_outputsEnabled)
     {
         return;
@@ -539,8 +537,9 @@ void Motor_Stop(void)
 void Motor_EStop(void)
 {
     taskENTER_CRITICAL();
-    g_targetRpm      = 0U;
-    g_activeRampRate = ESTOP_RAMP_RPM_PER_S;
+    g_targetRpm    = 0U;
+    g_referenceRpm = 0U;
+    g_piIntegral   = 0;
     taskEXIT_CRITICAL();
 }
 
@@ -553,7 +552,7 @@ void Motor_Disable(void)
     g_piIntegral     = 0;
     g_motorDuty      = 0U;
     taskEXIT_CRITICAL();
-
+    UARTprintf("Motor disabled\r\n");
     setDuty(0);
     stopMotor(1);
 }

@@ -39,7 +39,7 @@
 #include "utils/ustdlib.h"
 
 #include "queue.h"
-
+#include "debug/debug_log.h"
 #include "grlib.h"
 #include "drivers/Kentec320x240x16_ssd2119_spi.h"
 
@@ -115,7 +115,6 @@ typedef enum
     MOTOR_FAULT_LATCHED,
     MOTOR_ESTOP
 } MotorState_t;
-static const char *pcMotorStateToString(MotorState_t state);
 
 // Status of the system
 typedef struct
@@ -226,9 +225,9 @@ void vCreateUiTasks(void)
                               NULL);
     if (taskCreated == pdPASS)
     {
-        UARTprintf("SW1 task created\r\n");
+        DebugPrintf(DBG_INIT "SW1 task created\r\n");
     } else {
-        UARTprintf("SW1 task creation failed\r\n");
+        DebugPrintf(DBG_ERROR "SW1 task creation failed\r\n");
     }
 
     taskCreated = xTaskCreate(prvTaskSW2,
@@ -237,9 +236,11 @@ void vCreateUiTasks(void)
                               NULL,
                               tskIDLE_PRIORITY + 2,
                               NULL);
-    if (taskCreated != pdPASS)
+    if (taskCreated == pdPASS)
     {
-        UARTprintf("SW2 task creation failed\r\n");
+        DebugPrintf(DBG_INIT "SW2 task created\r\n");
+    } else {
+        DebugPrintf(DBG_ERROR "SW2 task creation failed\r\n");
     }
 
     taskCreated = xTaskCreate(prvDisplayTask,
@@ -267,7 +268,7 @@ static void prvTaskSW1(void *pvParameters)
             // StateManager_SetDesiredSpeed(1000U);
             StateManager_TriggerStart();
 
-            UARTprintf("SW1 pressed: START event fired\r\n");
+            DebugPrintf(DBG_HARDWARE "SW1 pressed: START event fired\r\n");
         }
     }
 }
@@ -276,52 +277,19 @@ static void prvTaskSW1(void *pvParameters)
 
 static void prvTaskSW2(void *pvParameters)
 {
-    UiCommand_t command;
+    (void)pvParameters;
 
     for (;;)
     {
         if (xSemaphoreTake(xSW2Semaphore, portMAX_DELAY) == pdPASS)
         {
-            command.commandType = UI_CMD_ACK_ESTOP;
-            command.desiredRPM = 0.0f;
             StateManager_TriggerEStop();
-            xQueueSend(xUiCommandQueue, &command, 0);
+
+            DebugPrintf(DBG_HARDWARE "SW2 pressed: E-STOP event fired\r\n");
         }
     }
 }
 
-/*-----------------------------------------------------------*/
-static const char *pcMotorStateToString(MotorState_t state)
-{
-    switch (state)
-    {
-        case MOTOR_IDLE:
-            return "Idle";
-
-        case MOTOR_STARTING:
-            return "Starting";
-
-        case MOTOR_RUNNING:
-            return "Running";
-
-        case MOTOR_STOPPING:
-            return "Stopping";
-
-        case MOTOR_STOPPED:
-            return "Stopped";
-
-        case MOTOR_FAULT_LATCHED:
-            return "Fault Latched";
-
-        case MOTOR_ESTOP:
-            return "E-STOP";
-
-        default:
-            return "Unknown";
-    }
-}
-
-/*-----------------------------------------------------------*/
 // time
 static void vFormatTimeFromTicks(TickType_t startTick, char *timeString)
 {
@@ -363,6 +331,8 @@ static void prvDisplayTask(void *pvParameters)
 
     SystemStatus_t receivedSystemStatus;
     SystemStatus_t latestSystemStatus;
+    SystemState_t currentSystemState;
+    SystemState_t lastDisplayedSystemState;
 
     tContext sContext;
 
@@ -374,6 +344,8 @@ static void prvDisplayTask(void *pvParameters)
     latestSystemStatus.currentRPM = 0.0f;
     latestSystemStatus.desiredRPM = 0.0f;
     latestSystemStatus.motorPower = 0.0f;
+    currentSystemState = StateManager_GetState();
+    lastDisplayedSystemState = currentSystemState;
 
     tRectangle screenRect = {0, 0, 319, 239};
 
@@ -419,6 +391,13 @@ static void prvDisplayTask(void *pvParameters)
 
     for (;;)
     {
+        currentSystemState = StateManager_GetState();
+        if (currentSystemState != lastDisplayedSystemState)
+        {
+            lastDisplayedSystemState = currentSystemState;
+            redrawHeader = true;
+        }
+
         if ((xTaskGetTickCount() - lastClockUpdateTick) >= pdMS_TO_TICKS(1000))
         {
             lastClockUpdateTick = xTaskGetTickCount();
@@ -474,17 +453,19 @@ static void prvDisplayTask(void *pvParameters)
             // Centre motor state text
             GrContextForegroundSet(&sContext, ClrWhite);
             GrStringDrawCentered(&sContext,
-                                pcMotorStateToString(latestSystemStatus.motorState),
+                                StateManager_GetStateString(),
                                  -1,
                                  160,
                                  10,
                                  false);
-            if (latestSystemStatus.eStopActive || latestSystemStatus.faultLatched)
+
+            if ((currentSystemState == SYSTEM_STATE_ESTOP_BRAKING) ||
+                (currentSystemState == SYSTEM_STATE_FAULT_LATCHED))
             {
                 GrContextForegroundSet(&sContext, ClrRed);
                 GrStringDraw(&sContext, "FAULT/E-STOP", -1, 220, 8, false);
             }
-            else if (latestSystemStatus.motorState == MOTOR_RUNNING)
+            else if (currentSystemState == SYSTEM_STATE_RUNNING)
             {
                 GrContextForegroundSet(&sContext, ClrGreen);
                 GrStringDraw(&sContext, "NORMAL", -1, 235, 8, false);
