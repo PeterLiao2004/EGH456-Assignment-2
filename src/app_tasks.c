@@ -28,7 +28,7 @@
 
 /* Application includes. */
 #include "motor/motor_tasks.h"
-#include "control/control_tasks.h"
+#include "control/state_manager.h"
 #include "sensors/sensor_tasks.h"
 #include "ui/ui_tasks.h"
 
@@ -49,8 +49,8 @@ void vCreateAppTasks(void)
 
     /* Create the application tasks. */
     vCreateMotorTasks();
-    vCreateControlTasks();
-    vCreateSensorTasks();
+    vCreateStateManagerTasks();
+    // vCreateSensorTasks();
     vCreateUiTasks();
 
 }

@@ -42,6 +42,9 @@
 
 #include "grlib.h"
 #include "drivers/Kentec320x240x16_ssd2119_spi.h"
+
+
+#include "control/state_manager.h"
 // #include "drivers/touch.h"
 
 /*-----------------------------------------------------------*/
@@ -221,8 +224,10 @@ void vCreateUiTasks(void)
                               NULL,
                               tskIDLE_PRIORITY + 2,
                               NULL);
-    if (taskCreated != pdPASS)
+    if (taskCreated == pdPASS)
     {
+        UARTprintf("SW1 task created\r\n");
+    } else {
         UARTprintf("SW1 task creation failed\r\n");
     }
 
@@ -253,27 +258,16 @@ void vCreateUiTasks(void)
 
 static void prvTaskSW1(void *pvParameters)
 {
-    UiCommand_t command;
-    static bool motorRequestedOn = false;
+    (void)pvParameters;
 
     for (;;)
     {
         if (xSemaphoreTake(xSW1Semaphore, portMAX_DELAY) == pdPASS)
         {
-            motorRequestedOn = !motorRequestedOn;
+            // StateManager_SetDesiredSpeed(1000U);
+            StateManager_TriggerStart();
 
-            if (motorRequestedOn)
-            {
-                command.commandType = UI_CMD_START_MOTOR;
-            }
-            else
-            {
-                command.commandType = UI_CMD_STOP_MOTOR;
-            }
-
-            command.desiredRPM = 0.0f;
-
-            xQueueSend(xUiCommandQueue, &command, 0);
+            UARTprintf("SW1 pressed: START event fired\r\n");
         }
     }
 }
@@ -290,7 +284,7 @@ static void prvTaskSW2(void *pvParameters)
         {
             command.commandType = UI_CMD_ACK_ESTOP;
             command.desiredRPM = 0.0f;
-
+            StateManager_TriggerEStop();
             xQueueSend(xUiCommandQueue, &command, 0);
         }
     }
@@ -608,6 +602,7 @@ void xButtonsHandler(void)
 {
     BaseType_t xLEDTaskWoken;
     uint32_t ui32Status;
+    TickType_t tickNow;
 
     xLEDTaskWoken = pdFALSE;
 
@@ -615,7 +610,9 @@ void xButtonsHandler(void)
 
     GPIOIntClear(BUTTONS_GPIO_BASE, ui32Status);
 
-    if ((xTaskGetTickCount() - g_ui32TimeStamp) > 100)
+    tickNow = xTaskGetTickCountFromISR();
+
+    if ((tickNow - g_ui32TimeStamp) > 100)
     {
         if ((ui32Status & USR_SW1) == USR_SW1)
         {
@@ -631,7 +628,7 @@ void xButtonsHandler(void)
         portYIELD_FROM_ISR(xLEDTaskWoken);
     }
 
-    g_ui32TimeStamp = xTaskGetTickCount();
+    g_ui32TimeStamp = tickNow;
 }
 
 /*-----------------------------------------------------------*/
