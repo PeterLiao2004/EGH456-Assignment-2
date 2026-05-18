@@ -27,7 +27,6 @@
 #include "drivers/rtos_hw_drivers.h"
 
 /* Sensor includes. */
-#include "drivers/i2cOptDriver.h"
 #include "drivers/opt3001.h"
 
 #include "driverlib/uart.h"
@@ -282,7 +281,7 @@ void vCreateUiTasks(void)
 
     taskCreated = xTaskCreate(prvTaskSW1,
                               "SW1",
-                              512,
+                              configMINIMAL_STACK_SIZE,
                               NULL,
                               tskIDLE_PRIORITY + 2,
                               NULL);
@@ -293,7 +292,7 @@ void vCreateUiTasks(void)
 
     taskCreated = xTaskCreate(prvTaskSW2,
                               "SW2",
-                              512,
+                              configMINIMAL_STACK_SIZE,
                               NULL,
                               tskIDLE_PRIORITY + 2,
                               NULL);

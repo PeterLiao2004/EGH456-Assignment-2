@@ -2,21 +2,31 @@
 #define MOTOR_TASKS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Motor control task header file. */
 void vCreateMotorTasks(void);
 
+typedef enum
+{
+    MOTOR_STATE_STOPPED = 0,
+    MOTOR_STATE_RUNNING,
+    MOTOR_STATE_STOPPING,
+    MOTOR_STATE_ESTOP_BRAKING,
+    MOTOR_STATE_FAULT_LATCHED
+} MotorState_t;
+
 /* Motor control API. Implementations will live in the motor module. */
 void Motor_Init(void);
-void Motor_Enable(void);
-void Motor_Disable(void);
+void Motor_Start(void);
+void Motor_Stop(void);
 
-void Motor_Kickstart(void);
-void Motor_SetDuty(float duty);
+uint32_t Motor_GetSpeed(void);
+void Motor_SetSpeed(uint32_t rpm);
 
-float Motor_GetSpeedRPM(void);
-float Motor_GetDuty(void);
-bool Motor_HasValidHallFeedback(void);
-bool Motor_IsStopped(void);
+void Motor_EStop(void);
+void Motor_ClearEStop(void);
+bool Motor_IsFaultLatched(void);
+MotorState_t Motor_GetState(void);
 
 #endif /* MOTOR_TASKS_H */

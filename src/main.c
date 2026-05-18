@@ -46,12 +46,18 @@ static void prvSetupHardware( void );
 
 /* Function to create the application tasks. */
 extern void vCreateAppTasks( void );
+
+/* Set up sensor configurations. */
+extern void sensor_main(void);
 /*-----------------------------------------------------------*/
 
 int main( void )
 {
+    IntMasterEnable();
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
+
+    sensor_main();
 
     /* Create the binary semaphore used to synchronize the button ISR and the
      * button processing task. */
@@ -162,7 +168,6 @@ static void prvConfigureHallSensors( void )
     IntEnable(INT_GPIOM);
     IntEnable(INT_GPIOH);
     IntEnable(INT_GPION);
-    IntMasterEnable();
 }
 /*-----------------------------------------------------------*/
 

@@ -36,17 +36,11 @@
 
 extern volatile uint32_t g_ui32SysClock;
 
-extern SemaphoreHandle_t xTimerSemaphore;
-extern SemaphoreHandle_t xButtonSemaphore;
+// extern SemaphoreHandle_t xTimerSemaphore;
+// extern SemaphoreHandle_t xButtonSemaphore;
 
 static volatile uint32_t g_ui32TimeStamp = 0;
 static volatile uint32_t g_ui32ButtonPressCount = 0;
-
-static void prvHeartbeatTask(void *pvParameters);
-static void prvButtonTask(void *pvParameters);
-static void prvConfigureLED(void);
-static void prvConfigureHWTimer(void);
-static void prvConfigureButton(void);
 
 /*-----------------------------------------------------------*/
 
@@ -54,9 +48,9 @@ void vCreateAppTasks(void)
 {
 
     /* Create the application tasks. */
-    //vCreateMotorTasks();
-    //vCreateControlTasks();
-    //vCreateSensorTasks();
+    vCreateMotorTasks();
+    vCreateControlTasks();
+    vCreateSensorTasks();
     vCreateUiTasks();
 
 }
