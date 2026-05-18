@@ -48,9 +48,8 @@ void vCreateAppTasks(void)
 {
 
     /* Create the application tasks. */
+    vCreateUiTasks();
     vCreateMotorTasks();
     vCreateControlTasks();
     vCreateSensorTasks();
-    vCreateUiTasks();
-
 }

@@ -37,6 +37,7 @@
 #include "driverlib/rom.h"
 #include "driverlib/i2c.h"
 #include "utils/ustdlib.h"
+#include "ui/ui_tasks.h"
 
 #include "queue.h"
 
@@ -138,22 +139,6 @@ RectangularButton(g_sPlotPageButton,
                   0,
                   0,
                   OnPlotPageButton);
-
-typedef struct
-{
-    uint32_t sequenceNum;
-    TickType_t timestamp;
-
-    float luxRaw;
-    float luxFiltered;
-
-    float temperatureC;
-    float humidityRH;
-
-    float accelerationFiltered;
-
-    float distanceCm;
-} SensorData_t;
 
 // Motor states
 typedef enum
@@ -673,7 +658,7 @@ static void prvDisplayTask(void *pvParameters)
             }
             else
             {
-                GrStringDraw(&sContext, "Day", -1, 5, 8, false);
+                GrStringDraw(&sContext, "19/05/2026", -1, 5, 8, false);
             }
 
             if (haveSensorData && g_currentPage == UI_PAGE_PLOT)

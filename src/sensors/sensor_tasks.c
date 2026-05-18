@@ -36,6 +36,7 @@
 #include "driverlib/rom.h"
 #include "driverlib/i2c.h"
 #include "utils/ustdlib.h"
+#include "ui/ui_tasks.h"
 
 #include "queue.h"
 
@@ -253,6 +254,22 @@ static void prvOpt3001Task(void *pvParameters)
                 // Update filter and get filtered value
                 xOpt3001Data.filteredLux = MovingAverage_Update(&opt3001Filter, xOpt3001Data.unfilteredLux);
 
+                SensorData_t uiSensorData;
+
+                uiSensorData.sequenceNum = xOpt3001Data.sequenceNum;
+                uiSensorData.timestamp = xOpt3001Data.timestamp;
+                uiSensorData.luxRaw = xOpt3001Data.unfilteredLux;
+                uiSensorData.luxFiltered = xOpt3001Data.filteredLux;
+
+                uiSensorData.temperatureC = 0.0f;
+                uiSensorData.humidityRH = 0.0f;
+                uiSensorData.accelerationFiltered = 0.0f;
+                uiSensorData.distanceCm = 0.0f;
+
+                if (xSensorQueue != NULL)
+                {
+                    xQueueSend(xSensorQueue, &uiSensorData, 0);
+                }
                 // Send data to queue for display task
                 xSemaphoreTake(xOpt3001QueueDropMutex, portMAX_DELAY);
                 if (uxQueueSpacesAvailable(xOpt3001Queue) == 0)
