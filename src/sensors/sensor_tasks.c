@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <math.h>
 
 /* Kernel includes. */
 #include "FreeRTOS.h"
@@ -28,6 +30,7 @@
 #include "drivers/i2c_driver.h"
 #include "drivers/opt3001.h"
 #include "drivers/sht31.h"
+#include "drivers/bmi160.h"
 
 #include "driverlib/uart.h"
 #include "driverlib/pin_map.h"
@@ -46,7 +49,7 @@
 // Define queue lengths for each sensor task
 #define opt3001QUEUE_LENGTH (5U) // 2Hz
 #define sht31QUEUE_LENGTH (3U)   // 1Hz
-// #define accelQUEUE_LENGTH (30U) // 100Hz
+#define bmi160QUEUE_LENGTH (30U) // 100Hz
 // #define distQUEUE_LENGTH (10U) // 20Hz
 
 /*----------------------------------------------------------- */
@@ -63,13 +66,17 @@ extern SemaphoreHandle_t xSlowTimerSemaphore;
 
 extern SemaphoreHandle_t xOpt3001ReadSemaphore;
 extern SemaphoreHandle_t xSHT31ReadSemaphore;
+extern SemaphoreHandle_t xBMI160ReadSemaphore;
 
 extern SemaphoreHandle_t xOpt3001QueueDropMutex;
 extern SemaphoreHandle_t xSHT31QueueDropMutex;
+extern SemaphoreHandle_t xBMI160QueueDropMutex;
 
 // Queues to hold data between tasks
 static QueueHandle_t xOpt3001Queue = NULL;
 static QueueHandle_t xSHT31Queue = NULL;
+static QueueHandle_t xBMI160Queue = NULL;
+
 // Called by app_tasks.c to create the sensor tasks
 void vCreateSensorTasks(void);
 
@@ -79,11 +86,13 @@ static void prvFastSchedulerTask(void *pvParameters);
 static void prvSlowSchedulerTask(void *pvParameters);
 static void prvOpt3001Task(void *pvParameters);
 static void prvSHT31Task(void *pvParameters);
+static void prvBMI160Task(void *pvParameters);
 static void prvDisplayTask(void *pvParameters);
 
 // Hardware configuration functions
 static void prvConfigureOpt3001(void);
 static void prvConfigureSHT31(void);
+static void prvConfigureBMI160(void);
 
 // Structs for passing data between tasks
 struct opt3001Data
@@ -103,11 +112,20 @@ struct sht31Data
     float filteredTemp;
     float filteredHumidity;
 };
+
+struct bmi160Data
+{
+    uint32_t sequenceNum;
+    TickType_t timestamp;
+    float unfilteredAccel;
+    float filteredAccel;
+};
 /*----------------------------------------------------------- */
 // Filter sizes
 #define MAX_FILTER_SIZE (10U)    // max filter size for any sensor task (used for memory allocation of filter buffers)
 #define OPT3001_FILTER_SIZE (4U) // 4-sample moving average filter for OPT3001
 #define SHT31_FILTER_SIZE (3U)   // 3-sample moving average filter for SHT31
+#define BMI160_FILTER_SIZE (5U)  // 5-sample moving average filter for BMI160
 
 // Create structure for moving average filter
 typedef struct
@@ -127,6 +145,7 @@ float MovingAverage_Update(MovingAverageFilter_t *filter, float newValue);
 MovingAverageFilter_t opt3001Filter;
 MovingAverageFilter_t sht31TempFilter;
 MovingAverageFilter_t sht31HumidityFilter;
+MovingAverageFilter_t bmi160Filter;
 
 /*----------------------------------------------------------- */
 
@@ -152,71 +171,92 @@ void vCreateSensorTasks(void)
         return;
     }
 
+    xBMI160Queue = xQueueCreate(bmi160QUEUE_LENGTH, sizeof(struct bmi160Data));
+    if (xBMI160Queue == NULL)
+    {
+        // Queue creation failed - handle error
+        xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+        UARTprintf("BMI160 Queue creation failed\n");
+        xSemaphoreGive(xUARTMutex);
+        return;
+    }
+
     bool taskCreated;
 
     taskCreated = xTaskCreate(prvSensorInitTask,
-                "SensorInit",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 3,
-                NULL);
+                              "SensorInit",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 3,
+                              NULL);
     if (taskCreated != pdPASS)
     {
         UARTprintf("Sensor Init task creation failed\r\n");
-    } 
+    }
 
     taskCreated = xTaskCreate(prvFastSchedulerTask,
-                "FastScheduler",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 2,
-                NULL);
+                              "FastScheduler",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 2,
+                              NULL);
     if (taskCreated != pdPASS)
     {
         UARTprintf("Fast Scheduler task creation failed\r\n");
     }
 
     taskCreated = xTaskCreate(prvSlowSchedulerTask,
-                "SlowScheduler",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 2,
-                NULL);
+                              "SlowScheduler",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 2,
+                              NULL);
     if (taskCreated != pdPASS)
     {
         UARTprintf("Slow Scheduler task creation failed\r\n");
     }
 
     taskCreated = xTaskCreate(prvOpt3001Task,
-                "Opt3001",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+                              "Opt3001",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 1,
+                              NULL);
     if (taskCreated != pdPASS)
-    {        
+    {
         UARTprintf("Opt3001 task creation failed\r\n");
     }
 
     taskCreated = xTaskCreate(prvSHT31Task,
-                "SHT31",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+                              "SHT31",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 1,
+                              NULL);
     if (taskCreated != pdPASS)
-    {        
+    {
         UARTprintf("SHT31 task creation failed\r\n");
     }
 
-    taskCreated = xTaskCreate(prvDisplayTask,
-                "Display",
-                configMINIMAL_STACK_SIZE,
-                NULL,
-                tskIDLE_PRIORITY + 1,
-                NULL);
+    taskCreated = xTaskCreate(prvBMI160Task,
+                              "BMI160",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 1,
+                              NULL);
     if (taskCreated != pdPASS)
-    {        
+    {
+        UARTprintf("BMI160 task creation failed\r\n");
+    }
+
+    taskCreated = xTaskCreate(prvDisplayTask,
+                              "Display",
+                              configMINIMAL_STACK_SIZE,
+                              NULL,
+                              tskIDLE_PRIORITY + 1,
+                              NULL);
+    if (taskCreated != pdPASS)
+    {
         UARTprintf("Display task creation failed\r\n");
     }
 }
@@ -260,6 +300,7 @@ static void prvSensorInitTask(void *pvParameters)
     // Configure Sensors
     prvConfigureOpt3001();
     prvConfigureSHT31();
+    prvConfigureBMI160();
 
     vTaskDelete(NULL); // delete self task after initialization
 }
@@ -281,10 +322,11 @@ static void prvFastSchedulerTask(void *pvParameters)
             //     // Power task?
             // }
 
-            // if (tick % 3 == 0) {
-            //     // Trigger 100Hz tasks
-            //     // Accelerometer task
-            // }
+            if (tick % 3 == 0)
+            {
+                // Trigger 100Hz tasks
+                xSemaphoreGive(xBMI160ReadSemaphore);
+            }
 
             // if (tick % 15 == 0) {
             //     // Trigger 20Hz tasks
@@ -428,17 +470,70 @@ static void prvSHT31Task(void *pvParameters)
 
 /*----------------------------------------------------------- */
 
+static void prvBMI160Task(void *pvParameters)
+{
+    bool success;
+
+    struct bmi160Data xBMI160Data;
+
+    MovingAverage_Init(&bmi160Filter, BMI160_FILTER_SIZE);
+
+    xBMI160Data.sequenceNum = 0U;
+    xBMI160Data.timestamp = 0U;
+    xBMI160Data.unfilteredAccel = 0.0f;
+    xBMI160Data.filteredAccel = 0.0f;
+
+    float rawAccelx = 0.0f;
+    float rawAccely = 0.0f;
+    float rawAccelz = 0.0f;
+
+    for (;;)
+    {
+        if (xSemaphoreTake(xBMI160ReadSemaphore,
+                           portMAX_DELAY) == pdPASS)
+        {
+            success = sensorBMI160Read(&rawAccelx, &rawAccely, &rawAccelz);
+
+            if (success)
+            {
+                xBMI160Data.sequenceNum++;
+                xBMI160Data.timestamp = xTaskGetTickCount();
+
+                // Combine acceleration data into 1 value
+                xBMI160Data.unfilteredAccel = fabsf(rawAccelx) + fabsf(rawAccely) + fabsf(rawAccelz);
+
+                xBMI160Data.filteredAccel = MovingAverage_Update(&bmi160Filter, xBMI160Data.unfilteredAccel);
+
+                // Send data to queue for display task
+                xSemaphoreTake(xBMI160QueueDropMutex, portMAX_DELAY);
+                if (uxQueueSpacesAvailable(xBMI160Queue) == 0)
+                {
+                    // Queue is full
+                    // Handle by removing oldest message in queue and adding new message
+                    struct bmi160Data dummyData;
+                    xQueueReceive(xBMI160Queue, (void *)&dummyData, 0); // remove oldest message in queue
+                }
+                xQueueSend(xBMI160Queue, (void *)&xBMI160Data, 0); // add new message to queue
+                xSemaphoreGive(xBMI160QueueDropMutex);
+            }
+        }
+    }
+}
+
+/*----------------------------------------------------------- */
+
 void prvDisplayTask(void *pvParameters)
 {
     struct opt3001Data receivedOpt3001Data;
     struct sht31Data receivedSHT31Data;
+    struct bmi160Data receivedBMI160Data;
 
     for (;;)
     {
         if (xQueueReceive(xOpt3001Queue, (void *)&receivedOpt3001Data, portMAX_DELAY) == pdPASS)
         {
             xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-            UARTprintf("OPT3001: UF Lux %5d.%02d, F Lux %5d.%02d\n",
+            UARTprintf("OPT3001: UF Lux:%5d.%02d, F Lux:%5d.%02d\n",
                        (int32_t)receivedOpt3001Data.unfilteredLux,
                        (int32_t)(receivedOpt3001Data.unfilteredLux * 100) % 100,
                        (int32_t)receivedOpt3001Data.filteredLux,
@@ -449,7 +544,7 @@ void prvDisplayTask(void *pvParameters)
         if (xQueueReceive(xSHT31Queue, (void *)&receivedSHT31Data, 0) == pdPASS)
         {
             xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-            UARTprintf("SHT31: UF Temp %3d.%02dC, UF Humidity %3d.%02d%% | F Temp %3d.%02dC, F Humidity %3d.%02d%%\n",
+            UARTprintf("SHT31: UF Temp:%3d.%02dC, UF Humidity:%3d.%02d%% | F Temp:%3d.%02dC, F Humidity:%3d.%02d%%\n",
                        (int32_t)receivedSHT31Data.unfilteredTemp,
                        (int32_t)(receivedSHT31Data.unfilteredTemp * 100) % 100,
                        (int32_t)receivedSHT31Data.unfilteredHumidity,
@@ -458,6 +553,17 @@ void prvDisplayTask(void *pvParameters)
                        (int32_t)(receivedSHT31Data.filteredTemp * 100) % 100,
                        (int32_t)receivedSHT31Data.filteredHumidity,
                        (int32_t)(receivedSHT31Data.filteredHumidity * 100) % 100);
+            xSemaphoreGive(xUARTMutex);
+        }
+
+        if (xQueueReceive(xBMI160Queue, (void *)&receivedBMI160Data, 0) == pdPASS)
+        {
+            xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+            UARTprintf("BMI160: UF Accel:%2d.%02d | F Accel:%d.%02d\n",
+                       (int32_t)receivedBMI160Data.unfilteredAccel,
+                       (int32_t)(receivedBMI160Data.unfilteredAccel * 100) % 100,
+                       (int32_t)receivedBMI160Data.filteredAccel,
+                       (int32_t)(receivedBMI160Data.filteredAccel * 100) % 100);
             xSemaphoreGive(xUARTMutex);
         }
     }
@@ -609,6 +715,38 @@ static void prvConfigureSHT31(void)
         {
             xSemaphoreTake(xUARTMutex, portMAX_DELAY);
             UARTprintf("SHT31 test failed 3 times, giving up\n");
+            xSemaphoreGive(xUARTMutex);
+            break;
+        }
+    }
+}
+
+/*----------------------------------------------------------- */
+
+static void prvConfigureBMI160(void)
+{
+    bool success;
+
+    sensorBMI160Init();
+
+    success = sensorBMI160Test();
+
+    int fail_count = 0;
+
+    while (!success)
+    {
+        fail_count++;
+        xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+        UARTprintf("BMI160 test failed\n");
+        xSemaphoreGive(xUARTMutex);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        success = sensorBMI160Test();
+        if (fail_count >= 3)
+        {
+            xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+            UARTprintf("BMI160 test failed 3 times, giving up\n");
             xSemaphoreGive(xUARTMutex);
             break;
         }
