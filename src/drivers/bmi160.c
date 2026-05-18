@@ -61,8 +61,6 @@ bool sensorBMI160Test(void)
 
     bool ok = I2C_read(BMI160_ADDR, BMI160_CHIP_ID, &id, 1);
 
-    UARTprintf("BMI160 raw read result = %d, id = 0x%02X\n", ok, id);
-
     return (ok && id == BMI160_CHIP_ID_VAL);
 }
 
