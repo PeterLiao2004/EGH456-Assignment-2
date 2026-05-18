@@ -1,11 +1,37 @@
-/*
- * Motor subsystem task scaffold.
+/**
+ * @file    motor_tasks.c
+ * @brief   Motor subsystem implementation - intent-based speed follower.
  *
- * This is the entry point for motor-owned RTOS tasks. Keep low-level motor
- * behavior in the motor module and let app_tasks.c only wire the module in.
+ * Implements the motor mechanics: hall sensing, commutation, speed
+ * measurement, ramp control, PI closed-loop controller, and PWM output.
+ *
+ * The motor module exposes an intent-based API to the state manager:
+ *
+ *     Motor_Start(initial_rpm)  ->  enable + kick + ramp at NORMAL rate
+ *     Motor_SetSpeed(rpm)       ->  change target, NORMAL ramp rate
+ *     Motor_Stop()              ->  ramp to 0 at NORMAL rate
+ *     Motor_EStop()             ->  ramp to 0 at EMERGENCY rate
+ *     Motor_Disable()           ->  immediate output disable, clear state
+ *
+ * Internally the motor task owns two ramp constants (NORMAL_RAMP_RPM_PER_S
+ * and ESTOP_RAMP_RPM_PER_S) and selects between them based on the most
+ * recent intent. The state manager never sees these values.
+ *
+ * RTOS structure:
+ *   - prvMotorTask runs periodically at MOTOR_CONTROL_PERIOD_MS (5 ms).
+ *   - Each iteration:
+ *       1. Update measured RPM at the configured sample rate.
+ *       2. If outputs are disabled, force duty to zero and skip control.
+ *       3. Otherwise ramp the reference toward the target at the active
+ *          ramp rate, run one PI iteration, and write duty to MotorLib.
+ *
+ * Shared variable protection:
+ *   All shared variables tagged "PROTECT" are accessed from the motor task,
+ *   the hall ISR, or external API callers. Critical sections guarantee
+ *   atomicity for read-modify-write sequences and multi-byte values.
  */
+
 /* Standard includes. */
-#include "driverlib/pin_map.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -15,16 +41,17 @@
 #include "task.h"
 
 /* Hardware includes. */
+#include "driverlib/pin_map.h"
 #include "inc/hw_ints.h"
 #include "inc/hw_memmap.h"
 #include "inc/hw_gpio.h"
 #include "inc/hw_types.h"
 #include "driverlib/interrupt.h"
 #include "driverlib/sysctl.h"
-#include "drivers/rtos_hw_drivers.h"
-#include "utils/uartstdio.h"
 #include "driverlib/gpio.h"
 #include "driverlib/pwm.h"
+#include "drivers/rtos_hw_drivers.h"
+#include "utils/uartstdio.h"
 
 /* Motor library include. */
 #include "motorlib.h"
@@ -32,33 +59,92 @@
 /* Application includes. */
 #include "motor_tasks.h"
 
+/*-----------------------------------------------------------------------------
+ * Private prototypes
+ *---------------------------------------------------------------------------*/
+static void     prvMotorTask(void *pvParameters);
+static void     prvKickStartMotor(void);
+static void     prvReadHallSensors(bool *hall_a, bool *hall_b, bool *hall_c);
+static void     prvUpdateMeasuredMotorSpeed(uint32_t sample_ms,
+                                            uint32_t *last_edge_count);
+static void     prvUpdateSpeedRamp(void);
+static uint32_t prvUpdatePIController(uint32_t reference_rpm,
+                                      uint32_t measured_rpm);
+static int32_t  prvClampInt32(int32_t value,
+                              int32_t min_value,
+                              int32_t max_value);
 
-/*-----------------------------------------------------------*/
-/* Motor control API. Implementations will live in the motor module. */
-void Motor_Init(void);
-void Motor_Start(void);
-void Motor_Stop(void);
+/*-----------------------------------------------------------------------------
+ * Configuration macros
+ *---------------------------------------------------------------------------*/
 
-uint32_t Motor_GetSpeed(void);
-void Motor_SetSpeed(uint32_t rpm);
+/* --- Hall sensor pins (BoosterPack 1) --- */
+#define HALL_A_PORT             GPIO_PORTM_BASE
+#define HALL_A_PIN              GPIO_PIN_3
+#define HALL_B_PORT             GPIO_PORTH_BASE
+#define HALL_B_PIN              GPIO_PIN_2
+#define HALL_C_PORT             GPIO_PORTN_BASE
+#define HALL_C_PIN              GPIO_PIN_2
 
-void Motor_EStop(void);
-void Motor_ClearEStop(void);
-bool Motor_IsFaultLatched(void);
-MotorState_t Motor_GetState(void);
+/* Hall edges per mechanical revolution. */
+#define HALL_EDGES_PER_MECH_REV 24U
 
-/*-----------------------------------------------------------*/
-// Private functions
-static void prvMotorTask( void *pvParameters );
-static void prvKickStartMotor( void );
-static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c );
-static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count );
-static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *target_index );
-static void prvUpdateSpeedRamp(void);
-static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_rpm);
-/*-----------------------------------------------------------*/
-/* Motor control task. */
-static void prvMotorTask(void *pvParameters);
+/* --- Motor PWM --- */
+#define MOTOR_PWM_PERIOD        50U     /* PWM period in microseconds.      */
+
+/* --- Timing --- */
+#define MOTOR_CONTROL_PERIOD_MS 5U      /* Control loop period (ms).        */
+#define SPEED_SAMPLE_MS         50U     /* Speed sampling period (ms).      */
+
+/* --- Speed and duty limits --- */
+#define MOTOR_SPEED_MIN_RPM     200U
+#define MOTOR_SPEED_MAX_RPM     6200U
+#define MOTOR_DUTY_MIN          1U
+#define MOTOR_DUTY_MAX          49U
+
+/* --- Ramp rates (RPM per second) ---
+ * NORMAL is used for Motor_Start / Motor_SetSpeed / Motor_Stop.
+ * ESTOP is used for Motor_EStop only.
+ */
+#define NORMAL_RAMP_RPM_PER_S   500U
+#define ESTOP_RAMP_RPM_PER_S    1000U
+
+/* --- PI controller --- */
+#define PI_SCALE                1000L
+#define PI_KP                   50L     /* Kp = PI_KP / PI_SCALE.           */
+#define PI_KI                   1L      /* Ki = PI_KI / PI_SCALE.           */
+#define PI_INTEGRAL_MIN         (-50000L)
+#define PI_INTEGRAL_MAX         (50000L)
+
+/*-----------------------------------------------------------------------------
+ * Private state
+ *---------------------------------------------------------------------------*/
+
+/* PROTECT: written by HallSensorHandler() ISR, read by task and API. */
+static volatile bool     g_hallAState;
+static volatile bool     g_hallBState;
+static volatile bool     g_hallCState;
+static volatile uint32_t g_hallEdgeCount;
+
+/* PROTECT: shared between motor task and Motor_* API callers. */
+static volatile bool     g_motorInitialised = false;
+static volatile bool     g_outputsEnabled   = false;
+static volatile uint16_t g_motorDuty        = 0U;
+static volatile uint32_t g_motorRpm         = 0U;
+
+/* PROTECT: setpoint inputs written by external callers, read by motor task. */
+static uint32_t g_targetRpm        = 0U;
+static uint32_t g_activeRampRate   = NORMAL_RAMP_RPM_PER_S;
+
+/* PROTECT: ramped reference RPM, written by motor task, readable via API. */
+static uint32_t g_referenceRpm     = 0U;
+
+/* PROTECT: PI controller integrator. */
+static int32_t  g_piIntegral       = 0;
+
+/*-----------------------------------------------------------------------------
+ * Task creation
+ *---------------------------------------------------------------------------*/
 
 void vCreateMotorTasks(void)
 {
@@ -70,154 +156,66 @@ void vCreateMotorTasks(void)
                 NULL);
 }
 
-//--------------------Private Motor variables and macros--------------------//
+/*-----------------------------------------------------------------------------
+ * Private helpers
+ *---------------------------------------------------------------------------*/
 
-//-------Hall sensors--------
-// Hall sensor inputs from BoosterPack 1:
-// Hall A -> PM3, Hall B -> PH2, Hall C -> PN2
-#define HALL_A_PORT GPIO_PORTM_BASE
-#define HALL_A_PIN  GPIO_PIN_3
-#define HALL_B_PORT GPIO_PORTH_BASE
-#define HALL_B_PIN  GPIO_PIN_2
-#define HALL_C_PORT GPIO_PORTN_BASE
-#define HALL_C_PIN  GPIO_PIN_2
-
-// Hall sensor state variables
-// PROTECT: HallSensorHandler() writes these from GPIO ISRs; task/API code must
-// read or reset them inside a critical section or through an ISR-safe snapshot.
-static volatile bool g_hallAState;
-static volatile bool g_hallBState;
-static volatile bool g_hallCState;
-static volatile uint32_t g_hallEdgeCount;
-static volatile bool g_hallStateChanged;
-
-//---------Motor control varialbes--------
-// Motor PWS period (in microseconds)
-#define MOTOR_PWM_PERIOD 50U
-// Speed sensing variables
-#define SPEED_SAMPLE_MS 50U
-#define HALL_EDGES_PER_MECH_REV 24U
-
-// DEBUG: print period for current state over UART
-#define PRINT_PERIOD_MS 250U
-
-// Motor state variables
-// PROTECT: These are shared by the motor task and public Motor_* API calls,
-// which may be called from other tasks. Keep related reads/writes atomic.
-static volatile bool g_motorInitialised = false;
-static volatile bool g_motorRunning = false;
-static volatile uint16_t g_motorDuty = 0;
-static volatile uint32_t g_motorRpm = 0;
-
-// Motor speed & duty cycle limits
-#define MOTOR_SPEED_MIN_RPM 200U
-#define MOTOR_SPEED_MAX_RPM 6200U
-
-#define MOTOR_DUTY_MIN        1U
-#define MOTOR_DUTY_MAX        49U
-
-// Ramp control limits
-#define MOTOR_CONTROL_PERIOD_MS 5U
-#define ACCEL_LIMIT_RPM_PER_S   500U
-#define DECEL_LIMIT_RPM_PER_S   500U
-
-// PROTECT: Command/reference RPM are shared between Motor_SetSpeed()/Stop/EStop
-// and the motor control loop. Protect updates that must be seen consistently.
-static uint32_t g_desiredRpm = 0U;    // user-requested RPM
-static uint32_t g_referenceRpm = 0U;  // ramped RPM used by controller / duty map
-
-// E-stop
-#define ESTOP_DECEL_RPM_PER_S 1000U
-
-
-//--- Proportional control---//
-// Fixed-point scaling for proportional gain
-#define PI_SCALE               1000L
-
-// Kp = PI_KP / PI_SCALE duty per RPM error.
-#define PI_KP                  50L
-
-// Ki = PI_KI / PI_SCALE duty per RPM integral.
-#define PI_KI                 1L
-
-#define PI_INTEGRAL_MIN       (-50000L)
-#define PI_INTEGRAL_MAX       (50000L)
-
-// PROTECT: Shared controller state; reset/update only while excluding other
-// Motor_* API paths that can reset the controller.
-static int32_t g_piIntegral = 0;
-
-//--------Motor States--------//
-// PROTECT: State/fault flags are shared between public Motor_* API calls and
-// the motor task state machine. Use critical sections around state decisions.
-static volatile MotorState_t g_motorState = MOTOR_STATE_STOPPED;
-static volatile bool g_motorEStopRequested = false;
-
-//-----------------------Motor test sequence -------------------------//
-
-// !!!!!!!!!!!!!!!!!!!!!!!!CHANGE THIS FOR TESTING !!!!!!!!!!!!!!!!!!!!!!! //
-// Set MOTOR_SPEED_TEST_ENABLED to 1U to enable an automated test sequence of speed changes, E-stop, and restarts, while logging the target speed at each step. Set to 0U for normal operation where the motor responds to commands through the Motor API functions.
-// Test sequence: set MOTOR_SPEED_TEST_ENABLED to 0U to hold one target speed.
-#define MOTOR_SPEED_TEST_ENABLED 0U
-
-// Motor test sequence steps
-typedef enum
-{
-    MOTOR_TEST_ACTION_START = 0,
-    MOTOR_TEST_ACTION_SET_SPEED,
-    MOTOR_TEST_ACTION_STOP,
-    MOTOR_TEST_ACTION_ESTOP,
-    MOTOR_TEST_ACTION_CLEAR_ESTOP
-} MotorSpeedTestAction_t;
-
-typedef struct
-{
-    MotorSpeedTestAction_t action;
-    uint32_t rpm;
-    uint32_t hold_ms;
-} MotorSpeedTestStep_t;
-
-static const MotorSpeedTestStep_t g_motorSpeedTestSteps[] =
-{
-    { MOTOR_TEST_ACTION_START,        400U,  10000U },
-    { MOTOR_TEST_ACTION_SET_SPEED,   3000U,  10000U },
-    { MOTOR_TEST_ACTION_STOP,           0U,   15000U },
-    { MOTOR_TEST_ACTION_START,        3000U,  10000U },
-    { MOTOR_TEST_ACTION_SET_SPEED,   6000U,  10000U },
-    { MOTOR_TEST_ACTION_ESTOP,          0U,   8000U },
-    { MOTOR_TEST_ACTION_CLEAR_ESTOP,  400U,  10000U },
-    { MOTOR_TEST_ACTION_SET_SPEED,   2000U,  10000U }
-};
-
-#define MOTOR_SPEED_TEST_STEP_COUNT \
-    (sizeof(g_motorSpeedTestSteps) / sizeof(g_motorSpeedTestSteps[0]))
-
-//----------------------------------------------------------------------
-
-//--------------------Private Motor functions--------------------//
-// Read the current state of the hall effect sensors and return as bools
-static void prvReadHallSensors( bool *hall_a, bool *hall_b, bool *hall_c )
+/**
+ * @brief Read the three hall sensor GPIO lines into booleans.
+ */
+static void prvReadHallSensors(bool *hall_a, bool *hall_b, bool *hall_c)
 {
     *hall_a = (GPIOPinRead(HALL_A_PORT, HALL_A_PIN) != 0U);
     *hall_b = (GPIOPinRead(HALL_B_PORT, HALL_B_PIN) != 0U);
     *hall_c = (GPIOPinRead(HALL_C_PORT, HALL_C_PIN) != 0U);
 }
 
-/*  Convert Hall edge counts over a fixed sample period into mechanical RPM. 
-    sample_ms: Sample period in milliseconds 
-    last_edge_count: Pointer to the last edge count
-    */ 
-static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge_count )
+/**
+ * @brief Open-loop commutation kick to start the motor from rest.
+ *
+ * Reads current hall states and advances the MotorLib commutation by one
+ * phase. Also resets the hall edge counter so the state manager sees only
+ * edges from this start-up onward.
+ */
+static void prvKickStartMotor(void)
+{
+    bool hall_a = false;
+    bool hall_b = false;
+    bool hall_c = false;
+
+    prvReadHallSensors(&hall_a, &hall_b, &hall_c);
+
+    taskENTER_CRITICAL();
+    g_hallAState    = hall_a;
+    g_hallBState    = hall_b;
+    g_hallCState    = hall_c;
+    g_hallEdgeCount = 0U;
+    taskEXIT_CRITICAL();
+
+    updateMotor(hall_a, hall_b, hall_c);
+}
+
+/**
+ * @brief Convert hall edge counts over a fixed sample period into mechanical RPM.
+ *
+ * Applies a 1st-order IIR filter (75/25 split) to the raw RPM for noise
+ * suppression.
+ *
+ * @param sample_ms        Sample period over which edges were counted.
+ * @param last_edge_count  In/out: previous edge count snapshot.
+ */
+static void prvUpdateMeasuredMotorSpeed(uint32_t sample_ms,
+                                        uint32_t *last_edge_count)
 {
     uint32_t edge_count;
     uint32_t delta_edges;
+    uint32_t raw_rpm;
 
     taskENTER_CRITICAL();
     edge_count = g_hallEdgeCount;
     taskEXIT_CRITICAL();
 
-    // Get number of edges since last sample, update last edge count
-    delta_edges = edge_count - *last_edge_count;
+    delta_edges      = edge_count - *last_edge_count;
     *last_edge_count = edge_count;
 
     if ((sample_ms == 0U) || (HALL_EDGES_PER_MECH_REV == 0U))
@@ -225,54 +223,44 @@ static void prvUpdateMeasuredMotorSpeed( uint32_t sample_ms, uint32_t *last_edge
         g_motorRpm = 0U;
         return;
     }
-    // Calculate raw RPM from edge count over sample period 
-    uint32_t raw_rpm;
+
     raw_rpm = (delta_edges * (60000U / HALL_EDGES_PER_MECH_REV)) / sample_ms;
-    
-    // filtered RPM = 75% old value + 25% new value
+
+    /* IIR: filtered = 0.75 * old + 0.25 * raw */
     g_motorRpm = ((3U * g_motorRpm) + raw_rpm) / 4U;
 }
 
-// Kick start the motor by reading the hall sensor state and update motor
-static void prvKickStartMotor( void )
-{
-    bool hall_a = false;
-    bool hall_b = false;
-    bool hall_c = false;
-
-    // Do an initial read of the hall effect sensor GPIO lines
-    prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-    taskENTER_CRITICAL();
-    g_hallAState = hall_a;
-    g_hallBState = hall_b;
-    g_hallCState = hall_c;
-    taskEXIT_CRITICAL();
-    // give the read hall effect sensor lines to updateMotor() to move the motor one single phase
-    updateMotor(hall_a, hall_b, hall_c);
-}
-
-// Ramp Control: update reference RPM to desired RPM at fixed acceleration/deceleration limits.
+/**
+ * @brief Ramp the reference RPM towards the target at the active ramp rate.
+ */
 static void prvUpdateSpeedRamp(void)
 {
     uint32_t step;
+    uint32_t target;
+    uint32_t rate;
 
-    if (g_referenceRpm < g_desiredRpm)
+    taskENTER_CRITICAL();
+    target = g_targetRpm;
+    rate   = g_activeRampRate;
+    taskEXIT_CRITICAL();
+
+    /* step (RPM per control period) = rate (RPM/s) * period (ms) / 1000 */
+    step = (rate * MOTOR_CONTROL_PERIOD_MS) / 1000U;
+    if (step == 0U)
     {
-        // Accelerating: (acceleration limit in RPM/s) * (control period in s) = max RPM change per control update
-        step = (ACCEL_LIMIT_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS     ) / 1000U;
+        step = 1U;     /* Guarantee progress at very low rates. */
+    }
 
+    if (g_referenceRpm < target)
+    {
         g_referenceRpm += step;
-
-        if (g_referenceRpm > g_desiredRpm)
+        if (g_referenceRpm > target)
         {
-            g_referenceRpm = g_desiredRpm;
+            g_referenceRpm = target;
         }
     }
-    else if (g_referenceRpm > g_desiredRpm)
+    else if (g_referenceRpm > target)
     {
-        // Decelerating: (deceleration limit in RPM/s) * (control period in s) = max RPM change per control update
-        step = (DECEL_LIMIT_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS     ) / 1000U;
-
         if (g_referenceRpm > step)
         {
             g_referenceRpm -= step;
@@ -282,13 +270,16 @@ static void prvUpdateSpeedRamp(void)
             g_referenceRpm = 0U;
         }
 
-        if (g_referenceRpm < g_desiredRpm)
+        if (g_referenceRpm < target)
         {
-            g_referenceRpm = g_desiredRpm;
+            g_referenceRpm = target;
         }
     }
 }
 
+/**
+ * @brief Clamp a signed 32-bit value into [min_value, max_value].
+ */
 static int32_t prvClampInt32(int32_t value, int32_t min_value, int32_t max_value)
 {
     if (value < min_value)
@@ -305,10 +296,18 @@ static int32_t prvClampInt32(int32_t value, int32_t min_value, int32_t max_value
     }
 }
 
-static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_rpm)
+/**
+ * @brief Run one iteration of the PI speed controller.
+ *
+ * @param reference_rpm  Ramped target RPM.
+ * @param measured_rpm   Latest measured RPM.
+ * @return  New duty cycle, clamped to [MOTOR_DUTY_MIN, MOTOR_DUTY_MAX].
+ *          Returns 0 if reference_rpm is zero.
+ */
+static uint32_t prvUpdatePIController(uint32_t reference_rpm,
+                                      uint32_t measured_rpm)
 {
     int32_t error;
-    //int32_t base_duty;
     int32_t p_correction;
     int32_t i_correction;
     int32_t duty;
@@ -320,35 +319,19 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
         return 0U;
     }
 
-    // Rough open-loop mapping
-    //base_duty = (int32_t)prvRpmToDuty(reference_rpm);
-
-    // Error: positive if motor is too slow, negative if motor is too fast
-    error = (int32_t)reference_rpm - (int32_t)measured_rpm;
-
-    // Proportional term
-    p_correction = (PI_KP * error) / PI_SCALE;
-
-    // Integral term candidate
+    /* Positive error -> motor too slow. */
+    error              = (int32_t)reference_rpm - (int32_t)measured_rpm;
+    p_correction       = (PI_KP * error) / PI_SCALE;
     integral_candidate = g_piIntegral + error;
+    integral_candidate = prvClampInt32(integral_candidate,
+                                       PI_INTEGRAL_MIN,
+                                       PI_INTEGRAL_MAX);
+    i_correction       = (PI_KI * integral_candidate) / PI_SCALE;
 
-    integral_candidate = prvClampInt32(
-        integral_candidate,
-        PI_INTEGRAL_MIN,
-        PI_INTEGRAL_MAX
-    );
-
-    i_correction = (PI_KI * integral_candidate) / PI_SCALE;
-
-    // Feedforward + PI correction
     duty = p_correction + i_correction;
+    duty = prvClampInt32(duty, (int32_t)MOTOR_DUTY_MIN, (int32_t)MOTOR_DUTY_MAX);
 
-    // Clamp final duty
-    duty = prvClampInt32(duty, MOTOR_DUTY_MIN, MOTOR_DUTY_MAX);
-
-    // Anti-windup:
-    // Only keep integrating if duty is not saturated,
-    // or if the error would move duty away from saturation.
+    /* Anti-windup: only accumulate if not pushing further into saturation. */
     if (!((duty >= (int32_t)MOTOR_DUTY_MAX && error > 0) ||
           (duty <= (int32_t)MOTOR_DUTY_MIN && error < 0)))
     {
@@ -358,214 +341,53 @@ static uint32_t prvUpdatePIController(uint32_t reference_rpm, uint32_t measured_
     return (uint32_t)duty;
 }
 
-// Estop braking: update reference RPM down to 0 at 1000 RPM/s, then latch fault state until cleared.
-static void prvUpdateEStopBraking(void)
+/*-----------------------------------------------------------------------------
+ * Motor task
+ *---------------------------------------------------------------------------*/
+
+/**
+ * @brief Motor control task entry point.
+ *
+ * Polls the outputs-enabled flag each iteration. When disabled, forces duty
+ * to zero. When enabled, runs the ramp and PI controller against the
+ * current target RPM and active ramp rate.
+ */
+static void prvMotorTask(void *pvParameters)
 {
-    uint32_t step;
-
-    step = (ESTOP_DECEL_RPM_PER_S * MOTOR_CONTROL_PERIOD_MS) / 1000U;
-
-    if (step == 0U)
-    {
-        step = 1U;
-    }
-
-    if (g_referenceRpm > step)
-    {
-        g_referenceRpm -= step;
-    }
-    else
-    {
-        g_referenceRpm = 0U;
-    }
-
-    g_desiredRpm = 0U;
-
-    if (g_referenceRpm == 0U)
-    {
-        g_piIntegral = 0;
-        g_motorDuty = 0U;
-
-        setDuty(0);
-        stopMotor(1);
-
-        g_motorRunning = false;
-        g_motorState = MOTOR_STATE_FAULT_LATCHED;
-    }
-}
-
-//-------------------TESTING: Motor Speed Test code --------------------//
-// Apply the current step in the motor speed test sequence 
-static void prvApplySpeedTestStep(uint32_t step_index)
-{
-    const MotorSpeedTestStep_t *step = &g_motorSpeedTestSteps[step_index];
-
-    switch (step->action)
-    {
-        case MOTOR_TEST_ACTION_START:
-            Motor_Start();
-            Motor_SetSpeed(step->rpm);
-            UARTprintf("Speed test: START, target=%u RPM\r\n",
-                       (unsigned int)step->rpm);
-            break;
-
-        case MOTOR_TEST_ACTION_SET_SPEED:
-            Motor_SetSpeed(step->rpm);
-            UARTprintf("Speed test: SET SPEED, target=%u RPM\r\n",
-                       (unsigned int)step->rpm);
-            break;
-
-        case MOTOR_TEST_ACTION_STOP:
-            Motor_Stop();
-            UARTprintf("Speed test: STOP\r\n");
-            break;
-
-        case MOTOR_TEST_ACTION_ESTOP:
-            Motor_EStop();
-            UARTprintf("Speed test: E-STOP\r\n");
-            break;
-
-        case MOTOR_TEST_ACTION_CLEAR_ESTOP:
-            Motor_ClearEStop();
-            Motor_Start();
-            Motor_SetSpeed(step->rpm);
-            UARTprintf("Speed test: CLEAR E-STOP, START, target=%u RPM\r\n",
-                       (unsigned int)step->rpm);
-            break;
-
-        default:
-            break;
-    }
-}
-
-// Update the target speed in the test sequence at fixed time intervals
-static void prvUpdateSpeedTest( TickType_t now, TickType_t *last_step_time, uint32_t *step_index )
-{
-#if (MOTOR_SPEED_TEST_ENABLED != 0U)
-    uint32_t elapsed_ms;
-    const MotorSpeedTestStep_t *step = &g_motorSpeedTestSteps[*step_index];
-
-    elapsed_ms = (uint32_t)((now - *last_step_time) * portTICK_PERIOD_MS);
-
-    if (elapsed_ms >= step->hold_ms)
-    {
-        *last_step_time = now;
-        *step_index = (*step_index + 1U) % MOTOR_SPEED_TEST_STEP_COUNT;
-
-        prvApplySpeedTestStep(*step_index);
-    }
-#else
-    (void)now;
-    (void)last_step_time;
-    (void)step_index;
-#endif
-}
-//----------------------------------------------------------------//
-
-//---------------------------Motor Task---------------------------//
-/* Motor control task implementation. */
-static void prvMotorTask( void *pvParameters )
-{
-    // Variables for speed sensing.
-    uint32_t last_edge_count = 0;
+    uint32_t   last_edge_count        = 0U;
     TickType_t last_speed_sample_time;
     TickType_t last_wake_time;
-    TickType_t last_print_time;
-    TickType_t last_test_step_time;
-    uint32_t speed_test_index = 0U;
 
-    ( void ) pvParameters;
+    (void)pvParameters;
 
+    /* Initialise motor hardware before the loop starts. */
+    Motor_Init();
 
-    // Initialise timing variables for speed sensing and debug printing
-    last_wake_time = xTaskGetTickCount();
+    last_wake_time         = xTaskGetTickCount();
     last_speed_sample_time = last_wake_time;
-    last_print_time = last_wake_time;
-    last_test_step_time = last_wake_time;
-
-    //----------Motor Speed control test-------------------------//
-    #if (MOTOR_SPEED_TEST_ENABLED != 0U)
-        // TESTING MODE: automatically step through a test sequence of speed changes, E-stop, and restarts, while logging the target speed at each step.
-        
-        //Initialise the motors and set the duty cycle (speed) in microseconds
-        Motor_Init();
-        // Kickstart the motor
-        Motor_Start();
-        
-        // Start test sequence
-        UARTprintf("Speed test started\r\n");
-        prvApplySpeedTestStep(speed_test_index);
-    #else
-        // NORMAL MODE: do nothing and wait for user/another task commands through the Motor API functions. 
-    #endif
-    //------------------------------------------------------------//
 
     for (;;)
     {
-        // Get current tick count and elapsed time since last speed sample
-        TickType_t now = xTaskGetTickCount();
-        uint32_t elapsed_ms = (uint32_t)((now - last_speed_sample_time) * portTICK_PERIOD_MS);
+        TickType_t now        = xTaskGetTickCount();
+        uint32_t   elapsed_ms = (uint32_t)((now - last_speed_sample_time)
+                                           * portTICK_PERIOD_MS);
 
-        // Update measured motor speed over a fixed sample period
+        /* --- Speed measurement at the configured sample rate --- */
         if (elapsed_ms >= SPEED_SAMPLE_MS)
         {
             prvUpdateMeasuredMotorSpeed(elapsed_ms, &last_edge_count);
             last_speed_sample_time = now;
         }
 
-        prvUpdateSpeedTest(now, &last_test_step_time, &speed_test_index);
-
-        // Update motor control based on current state
-        taskENTER_CRITICAL();
-        MotorState_t state = g_motorState;
-        taskEXIT_CRITICAL();
-
-        /* 
-            Update motor control based on current state:
-                - If in E-stop braking state, ramp down speed to 0 at ESTOP_DECEL_RPM_PER_S, then latch fault state.
-                - If in fault latched state, hold motor stopped regardless of commands.
-                - Otherwise, update speed ramp and PI controller as normal.
-        */
-        if (state == MOTOR_STATE_ESTOP_BRAKING)
+        if (g_outputsEnabled)
         {
-            prvUpdateEStopBraking();
-        }
-        else if (state == MOTOR_STATE_FAULT_LATCHED)
-        {
-            setDuty(0);
-            stopMotor(1);
+            uint32_t duty;
 
-            g_motorDuty = 0U;
-            g_desiredRpm = 0U;
-            g_referenceRpm = 0U;
-            g_piIntegral = 0;
-        }
-        else if (state == MOTOR_STATE_STOPPING)
-        {
             prvUpdateSpeedRamp();
-            if (g_referenceRpm == 0U)
-            {
-                setDuty(0U);
-                stopMotor(1);
-                g_motorDuty = 0U;
-                g_motorRunning = false;
-                g_motorState = MOTOR_STATE_STOPPED;
-            }
-        }
-        else
-        {
-            prvUpdateSpeedRamp();
-        }
+            duty = prvUpdatePIController(g_referenceRpm, g_motorRpm);
 
-        // Update duty cycle based on reference RPM and measured RPM using PI controller
-        uint32_t duty = prvUpdatePIController(g_referenceRpm, g_motorRpm);
-
-        if ((state == MOTOR_STATE_RUNNING) ||
-            (state == MOTOR_STATE_STOPPING) ||
-            (state == MOTOR_STATE_ESTOP_BRAKING))
-        {
             setDuty(duty);
-            g_motorDuty = duty;
+            g_motorDuty = (uint16_t)duty;
         }
         else
         {
@@ -574,162 +396,120 @@ static void prvMotorTask( void *pvParameters )
             g_motorDuty = 0U;
         }
 
-        //--------------------------------------------------------------------//
-        // // DEBUG: log the current state every 250ms
-        // uint32_t print_elapsed_ms =
-        //     (uint32_t)((now - last_print_time) * portTICK_PERIOD_MS);
-
-        // if (print_elapsed_ms >= PRINT_PERIOD_MS)
-        // {
-        //     last_print_time = now;
-
-        //     UARTprintf("Desired=%u, Ref=%u, Measured=%u, Duty=%u, I=%d\r\n",
-        //         (unsigned int)g_desiredRpm,
-        //         (unsigned int)g_referenceRpm,
-        //         (unsigned int)g_motorRpm,
-        //         (unsigned int)duty,
-        //         (int)g_piIntegral);
-        // }
-
-        //---------------------------------------------------------------------//
-
-        // Sleep until the next control update period
-        vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS( MOTOR_CONTROL_PERIOD_MS  ));
-
+        vTaskDelayUntil(&last_wake_time,
+                        pdMS_TO_TICKS(MOTOR_CONTROL_PERIOD_MS));
     }
 }
 
-/*-----------------------------------------------------------*/
+/*-----------------------------------------------------------------------------
+ * Hall sensor ISR
+ *---------------------------------------------------------------------------*/
 
-/* Interrupt handlers */
+/**
+ * @brief Hall sensor edge interrupt handler.
+ *
+ * Reads the latest hall states, advances commutation via MotorLib, and
+ * increments the edge counter used for speed measurement.
+ */
 void HallSensorHandler(void)
 {
     bool hall_a;
     bool hall_b;
     bool hall_c;
 
-    /* Read the current Hall state before updating commutation. */
     prvReadHallSensors(&hall_a, &hall_b, &hall_c);
+
     g_hallAState = hall_a;
     g_hallBState = hall_b;
     g_hallCState = hall_c;
     g_hallEdgeCount++;
-    g_hallStateChanged = true;
 
-    /* Clear any pending edge interrupts across the three Hall input ports. */
+    /* Clear pending edge interrupts on all three hall input ports. */
     GPIOIntClear(HALL_A_PORT, HALL_A_PIN);
     GPIOIntClear(HALL_B_PORT, HALL_B_PIN);
     GPIOIntClear(HALL_C_PORT, HALL_C_PIN);
 
     updateMotor(hall_a, hall_b, hall_c);
-
-    // Could also add speed sensing code here too.
-    
 }
-//--------------------Motor API functions--------------------//
-// Initialise motor 
+
+/*-----------------------------------------------------------------------------
+ * Lifecycle
+ *---------------------------------------------------------------------------*/
+
 void Motor_Init(void)
 {
     initMotorLib(MOTOR_PWM_PERIOD);
 
-    // Start in a safe known state
+    /* Start in a known safe state. */
     setDuty(0);
     stopMotor(1);
 
-    // Reset motor state variables
-    g_motorDuty = 0;
-    g_motorRunning = false;
+    g_motorDuty      = 0U;
+    g_outputsEnabled = false;
 
     prvReadHallSensors((bool *)&g_hallAState,
                        (bool *)&g_hallBState,
                        (bool *)&g_hallCState);
 
-    g_hallEdgeCount = 0;
-    g_hallStateChanged = false;
-    g_motorRpm = 0U;
+    g_hallEdgeCount  = 0U;
+    g_motorRpm       = 0U;
+    g_targetRpm      = 0U;
+    g_referenceRpm   = 0U;
+    g_activeRampRate = NORMAL_RAMP_RPM_PER_S;
+    g_piIntegral     = 0;
 
     g_motorInitialised = true;
 }
 
-// Start the motor
-void Motor_Start(void)
+/*-----------------------------------------------------------------------------
+ * Intent-based control API
+ *---------------------------------------------------------------------------*/
+
+void Motor_Start(uint32_t initial_rpm)
 {
     if (!g_motorInitialised)
     {
         return;
     }
 
-    taskENTER_CRITICAL();
-
-    if ((g_motorState == MOTOR_STATE_ESTOP_BRAKING) ||
-        (g_motorState == MOTOR_STATE_FAULT_LATCHED))
+    /* Clamp the initial target. */
+    if (initial_rpm > MOTOR_SPEED_MAX_RPM)
     {
-        taskEXIT_CRITICAL();
-        return;
+        initial_rpm = MOTOR_SPEED_MAX_RPM;
+    }
+    else if ((initial_rpm != 0U) && (initial_rpm < MOTOR_SPEED_MIN_RPM))
+    {
+        initial_rpm = MOTOR_SPEED_MIN_RPM;
     }
 
-    g_motorState = MOTOR_STATE_RUNNING;
-
+    /* Configure setpoints under critical section so they take effect together. */
+    taskENTER_CRITICAL();
+    g_targetRpm      = initial_rpm;
+    g_activeRampRate = NORMAL_RAMP_RPM_PER_S;
+    g_piIntegral     = 0;
+    g_outputsEnabled = true;
     taskEXIT_CRITICAL();
 
+    /* Enable hardware and kick commutation. */
     enableMotor();
-
     setDuty(10);
-    g_motorDuty = 10;
-
+    g_motorDuty = 10U;
     prvKickStartMotor();
-
     setDuty(5);
-    g_motorDuty = 5;
-
-    g_motorRunning = true;
+    g_motorDuty = 5U;
 }
 
-// Stop the motor
-void Motor_Stop(void)
-{
-    taskENTER_CRITICAL();
-
-    if ((g_motorState != MOTOR_STATE_ESTOP_BRAKING) &&
-        (g_motorState != MOTOR_STATE_FAULT_LATCHED))
-    {
-        g_desiredRpm = 0U;
-        g_motorState = MOTOR_STATE_STOPPING;
-    }
-
-    taskEXIT_CRITICAL();
-}
-
-// Return the most recent measured motor speed in RPM.
-uint32_t Motor_GetSpeed(void)
-{
-    uint32_t rpm;
-
-    taskENTER_CRITICAL();
-    rpm = g_motorRpm;
-    taskEXIT_CRITICAL();
-
-    return rpm;
-}
-// Set desired motor speed in RPM
 void Motor_SetSpeed(uint32_t rpm)
 {
-    taskENTER_CRITICAL();
-
-    if ((g_motorState == MOTOR_STATE_ESTOP_BRAKING) ||
-        (g_motorState == MOTOR_STATE_FAULT_LATCHED))
+    if (!g_outputsEnabled)
     {
-        taskEXIT_CRITICAL();
         return;
     }
-
-    taskEXIT_CRITICAL();
 
     if (rpm == 0U)
     {
-        taskENTER_CRITICAL();
-        g_desiredRpm = 0U;
-        taskEXIT_CRITICAL();
+        /* Treat as a normal stop. */
+        Motor_Stop();
         return;
     }
 
@@ -743,156 +523,111 @@ void Motor_SetSpeed(uint32_t rpm)
     }
 
     taskENTER_CRITICAL();
-    g_desiredRpm = rpm;
+    g_targetRpm      = rpm;
+    g_activeRampRate = NORMAL_RAMP_RPM_PER_S;
     taskEXIT_CRITICAL();
 }
 
-// Estop
+void Motor_Stop(void)
+{
+    taskENTER_CRITICAL();
+    g_targetRpm      = 0U;
+    g_activeRampRate = NORMAL_RAMP_RPM_PER_S;
+    taskEXIT_CRITICAL();
+}
+
 void Motor_EStop(void)
 {
     taskENTER_CRITICAL();
-
-    g_motorEStopRequested = true;
-    g_motorState = MOTOR_STATE_ESTOP_BRAKING;
-
-    /* Ignore normal commands by forcing desired RPM to zero. */
-    g_desiredRpm = 0U;
-
+    g_targetRpm      = 0U;
+    g_activeRampRate = ESTOP_RAMP_RPM_PER_S;
     taskEXIT_CRITICAL();
 }
 
-void Motor_ClearEStop(void)
+void Motor_Disable(void)
 {
     taskENTER_CRITICAL();
-
-    if (g_motorState == MOTOR_STATE_FAULT_LATCHED)
-    {
-        g_motorEStopRequested = false;
-        g_motorState = MOTOR_STATE_STOPPED;
-
-        g_desiredRpm = 0U;
-        g_referenceRpm = 0U;
-        g_motorDuty = 0U;
-        g_piIntegral = 0;
-    }
-
+    g_outputsEnabled = false;
+    g_targetRpm      = 0U;
+    g_referenceRpm   = 0U;
+    g_piIntegral     = 0;
+    g_motorDuty      = 0U;
     taskEXIT_CRITICAL();
+
+    setDuty(0);
+    stopMotor(1);
 }
 
-bool Motor_IsFaultLatched(void)
+/*-----------------------------------------------------------------------------
+ * Status helpers
+ *---------------------------------------------------------------------------*/
+
+uint32_t Motor_GetHallEdgeCount(void)
 {
-    bool latched;
+    uint32_t count;
 
     taskENTER_CRITICAL();
-    latched = (g_motorState == MOTOR_STATE_FAULT_LATCHED);
+    count = g_hallEdgeCount;
     taskEXIT_CRITICAL();
 
-    return latched;
+    return count;
 }
 
-MotorState_t Motor_GetState(void)
+bool Motor_HasReachedZero(void)
 {
-    MotorState_t state;
+    bool stopped;
 
     taskENTER_CRITICAL();
-    state = g_motorState;
+    stopped = ((g_referenceRpm == 0U) && (g_motorRpm == 0U));
     taskEXIT_CRITICAL();
 
-    return state;
+    return stopped;
 }
 
+/*-----------------------------------------------------------------------------
+ * Telemetry
+ *---------------------------------------------------------------------------*/
 
+uint32_t Motor_GetSpeed(void)
+{
+    uint32_t rpm;
 
-//-----------------------Code Graveyard, ignore-----------------------//
-// // log hall sensor state
-// if(g_hallStateChanged){
-//     g_hallStateChanged = false;
-//     prvLogHallState("Edge", g_hallAState, g_hallBState, g_hallCState);
-// }
+    taskENTER_CRITICAL();
+    rpm = g_motorRpm;
+    taskEXIT_CRITICAL();
 
-// // Helper: Log current state of Hall sensor via UART
-// static void prvLogHallState( const char *tag, bool hall_a, bool hall_b, bool hall_c )
-// {
-//     UARTprintf("%s Hall state A=%d B=%d C=%d edges=%u\r\n",
-//                tag,
-//                hall_a ? 1 : 0,
-//                hall_b ? 1 : 0,
-//                hall_c ? 1 : 0,
-//                (unsigned int)g_hallEdgeCount);
-// }
+    return rpm;
+}
 
-//prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-// prvLogHallState("Poll", hall_a, hall_b, hall_c);
+uint16_t Motor_GetDuty(void)
+{
+    uint16_t duty;
 
+    taskENTER_CRITICAL();
+    duty = g_motorDuty;
+    taskEXIT_CRITICAL();
 
-// if(duty_value >= MOTOR_PWM_PERIOD){
-//     Motor_Stop();
-//     UARTprintf("Motor Stopped\r\n");
-//     vTaskDelay(pdMS_TO_TICKS( SPEED_SAMPLE_MS ));
-//     continue;
-// }
+    return duty;
+}
 
-// prvReadHallSensors(&hall_a, &hall_b, &hall_c);
-// prvLogHallState("Initial", hall_a, hall_b, hall_c);
+uint32_t Motor_GetReferenceRpm(void)
+{
+    uint32_t rpm;
 
+    taskENTER_CRITICAL();
+    rpm = g_referenceRpm;
+    taskEXIT_CRITICAL();
 
-// // Temporary: Rough mapping of RPM to duty cycle for testing. Replace with a proper control algorithm in the future.
-// static uint32_t prvRpmToDuty(uint32_t rpm)
-// {
-//     if (rpm == 0U)
-//     {
-//         return MOTOR_DUTY_MIN;
-//     }
-//     else if (rpm <= 600U)
-//     {
-//         return 7U;     // ~590 rpm
-//     }
-//     else if (rpm <= 1000U)
-//     {
-//         return 9U;     // ~950 rpm
-//     }
-//     else if (rpm <= 1500U)
-//     {
-//         return 13U;    // ~1450 rpm
-//     }
-//     else if (rpm <= 2000U)
-//     {
-//         return 17U;    // ~2010 rpm
-//     }
-//     else if (rpm <= 2500U)
-//     {
-//         return 20U;    // ~2470 rpm
-//     }
-//     else if (rpm <= 3000U)
-//     {
-//         return 23U;    // ~2970 rpm
-//     }
-//     else if (rpm <= 3500U)
-//     {
-//         return 26U;    // ~3470 rpm
-//     }
-//     else if (rpm <= 4000U)
-//     {
-//         return 29U;    // ~3970 rpm
-//     }
-//     else if (rpm <= 4500U)
-//     {
-//         return 33U;    // ~4460 rpm
-//     }
-//     else if (rpm <= 5000U)
-//     {
-//         return 39U;    // ~5010 rpm
-//     }
-//     else if (rpm <= 5500U)
-//     {
-//         return 43U;    // ~5500 rpm
-//     }
-//     else if (rpm <= 6000U)
-//     {
-//         return 46U;    // ~5920 rpm
-//     }
-//     else
-//     {
-//         return MOTOR_DUTY_MAX;    // ~6390 rpm max tested
-//     }
-// }
+    return rpm;
+}
+
+uint32_t Motor_GetTargetRpm(void)
+{
+    uint32_t rpm;
+
+    taskENTER_CRITICAL();
+    rpm = g_targetRpm;
+    taskEXIT_CRITICAL();
+
+    return rpm;
+}
