@@ -224,6 +224,16 @@ static void prvOpt3001Task(void *pvParameters)
                 {
                     xQueueSend(xOpt3001Queue, &opt3001Data, 0);
                 }
+
+                xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+                UARTprintf("Seq Num: %5d | Timestamp: %5d | Unfiltered Lux: %5d.%02d | Filtered Lux: %5d.%02d\n",
+                           opt3001Data.sequenceNum,
+                           opt3001Data.timestamp,
+                           (int32_t)(opt3001Data.luxRaw * 100.0f) / 100,
+                           (int32_t)(opt3001Data.luxRaw * 100.0f) % 100,
+                           (uint32_t)(opt3001Data.luxFiltered * 100.0f) / 100,
+                           (uint32_t)(opt3001Data.luxFiltered * 100.0f) % 100);
+                xSemaphoreGive(xUARTMutex);
             }
         }
     }
