@@ -558,19 +558,30 @@ static void prvConfigureOpt3001(void)
     // Initialise sensor
     sensorOpt3001Init();
 
-
     success = sensorOpt3001Test();
+
+    int fail_count = 0;
 
     // If the test fails, retry the full init + test sequence rather than
     // retesting a sensor that was never successfully enabled.
     while (!success)
     {
-        SysCtlDelay(g_ui32SysClock);
+        fail_count++;
         xSemaphoreTake(xUARTMutex, portMAX_DELAY);
-        UARTprintf("Test Failed, Trying again\n");
+        UARTprintf("OPT3001 Test Failed, Trying again\n");
         xSemaphoreGive(xUARTMutex);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
         sensorOpt3001Init();
         success = sensorOpt3001Test();
+        if (fail_count >= 3)
+        {
+            xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+            UARTprintf("OPT3001 test failed 3 times, giving up\n");
+            xSemaphoreGive(xUARTMutex);
+            break;
+        }
     }
 }
 
@@ -582,8 +593,11 @@ static void prvConfigureSHT31(void)
 
     success = sensorSHT31Test();
 
+    int fail_count = 0;
+
     while (!success)
     {
+        fail_count++;
         xSemaphoreTake(xUARTMutex, portMAX_DELAY);
         UARTprintf("SHT31 test failed\n");
         xSemaphoreGive(xUARTMutex);
@@ -591,6 +605,13 @@ static void prvConfigureSHT31(void)
         vTaskDelay(pdMS_TO_TICKS(1000));
 
         success = sensorSHT31Test();
+        if (fail_count >= 3)
+        {
+            xSemaphoreTake(xUARTMutex, portMAX_DELAY);
+            UARTprintf("SHT31 test failed 3 times, giving up\n");
+            xSemaphoreGive(xUARTMutex);
+            break;
+        }
     }
 }
 
