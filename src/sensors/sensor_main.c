@@ -71,14 +71,14 @@ static void prvConfigureTimers(void) {
     IntEnable(INT_TIMER0A);
     TimerEnable(TIMER0_BASE, TIMER_A);
 
-    /* Timer 1A configs - slow 2Hz timer*/
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
-    TimerConfigure(TIMER1_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER1_BASE, TIMER_A, g_ui32SysClock / 2 -1); // 2Hz timer
+    /* Timer 2A configs - slow 2Hz timer */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER2);
+    TimerConfigure(TIMER2_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER2_BASE, TIMER_A, g_ui32SysClock / 2 - 1); // 2Hz timer
 
-    TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
-    IntEnable(INT_TIMER1A);
-    TimerEnable(TIMER1_BASE, TIMER_A);
+    TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+    IntEnable(INT_TIMER2A);
+    TimerEnable(TIMER2_BASE, TIMER_A);
 }
 
 /*-----------------------------------------------------------*/

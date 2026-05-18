@@ -313,10 +313,10 @@ void Timer0IntHandler(void)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-void Timer1IntHandler(void)
+void Timer2IntHandler(void)
 {
     // Clear the timer interrupt.
-    TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+    TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
 
     // Prepare context switch flag
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
