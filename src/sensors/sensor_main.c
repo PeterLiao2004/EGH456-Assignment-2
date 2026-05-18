@@ -41,15 +41,13 @@ SemaphoreHandle_t xOpt3001QueueDropMutex = NULL;
 
 /* Set up the clock and pin configurations to run this example. */
 static void prvSetupHardware(void);
+extern void Timer2IntHandler(void);
 
 extern volatile uint32_t g_ui32SysClock;
 /*-----------------------------------------------------------*/
 
 void sensor_main(void)
 {
-    /* Prepare the hardware to run this example. */
-    prvSetupHardware();
-
     // Create semaphores and mutexes for sensor tasks
     xFastTimerSemaphore = xSemaphoreCreateBinary();
     xSlowTimerSemaphore = xSemaphoreCreateBinary();
@@ -57,6 +55,9 @@ void sensor_main(void)
     xOpt3001ReadSemaphore = xSemaphoreCreateBinary();
     
     xOpt3001QueueDropMutex = xSemaphoreCreateMutex();
+
+    /* Prepare the hardware to run this example. */
+    prvSetupHardware();
 }
 
 /*-----------------------------------------------------------*/
@@ -71,14 +72,15 @@ static void prvConfigureTimers(void) {
     IntEnable(INT_TIMER0A);
     TimerEnable(TIMER0_BASE, TIMER_A);
 
-    /* Timer 1A configs - slow 2Hz timer*/
-    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER1);
-    TimerConfigure(TIMER1_BASE, TIMER_CFG_PERIODIC);
-    TimerLoadSet(TIMER1_BASE, TIMER_A, g_ui32SysClock / 2 -1); // 2Hz timer
+    /* Timer 2A configs - slow 2Hz timer */
+    SysCtlPeripheralEnable(SYSCTL_PERIPH_TIMER2);
+    TimerConfigure(TIMER2_BASE, TIMER_CFG_PERIODIC);
+    TimerLoadSet(TIMER2_BASE, TIMER_A, g_ui32SysClock / 2 - 1); // 2Hz timer
 
-    TimerIntEnable(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
-    IntEnable(INT_TIMER1A);
-    TimerEnable(TIMER1_BASE, TIMER_A);
+    TimerIntRegister(TIMER2_BASE, TIMER_A, Timer2IntHandler);
+    TimerIntEnable(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
+    IntEnable(INT_TIMER2A);
+    TimerEnable(TIMER2_BASE, TIMER_A);
 }
 
 /*-----------------------------------------------------------*/

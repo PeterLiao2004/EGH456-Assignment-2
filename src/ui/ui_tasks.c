@@ -69,7 +69,6 @@ extern void i2cOptDriverInit(void);
 volatile uint32_t g_ui32TimeStamp = 0;
 volatile static uint32_t g_pui32ButtonPressed = 0;
 
-static volatile UiPage_t g_currentPage = UI_PAGE_MOTOR;
 static volatile bool g_pageChanged = true;
 
 extern SemaphoreHandle_t xSW1Semaphore;
@@ -89,7 +88,6 @@ static void vFormatTimeFromTicks(TickType_t startTick, char *timeString);
 // pages plot
 static void OnMotorPageButton(tWidget *psWidget);
 static void OnPlotPageButton(tWidget *psWidget);
-static void prvDrawMotorPage(tContext *psContext, SystemStatus_t *latestSystemStatus);
 static void prvDrawPlotPageBase(tContext *psContext);
 
 void vCreateUiTasks(void);
@@ -226,6 +224,8 @@ typedef enum
     UI_PAGE_PLOT,
     UI_PAGE_COUNT
 } UiPage_t;
+static volatile UiPage_t g_currentPage = UI_PAGE_MOTOR;
+static void prvDrawMotorPage(tContext *psContext, SystemStatus_t *latestSystemStatus);
 
 /*-----------------------------------------------------------*/
 

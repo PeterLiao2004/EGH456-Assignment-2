@@ -313,10 +313,10 @@ void Timer0IntHandler(void)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-void Timer1IntHandler(void)
+void Timer2IntHandler(void)
 {
     // Clear the timer interrupt.
-    TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
+    TimerIntClear(TIMER2_BASE, TIMER_TIMA_TIMEOUT);
 
     // Prepare context switch flag
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
@@ -326,6 +326,12 @@ void Timer1IntHandler(void)
 
     // Request context switch if needed
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
+
+void Timer1IntHandler(void)
+{
+    // Timer1 is reserved for the touchscreen driver.
+    TimerIntClear(TIMER1_BASE, TIMER_TIMA_TIMEOUT);
 }
 
 /*----------------------------------------------------------- */

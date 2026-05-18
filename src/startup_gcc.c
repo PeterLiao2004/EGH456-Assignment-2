@@ -49,6 +49,7 @@ extern void Timer1IntHandler(void);
 extern void I2C2IntHandler(void);
 extern void xButtonsHandler(void);
 extern void HallSensorHandler(void);
+extern void TouchScreenIntHandler(void);
 
 //*****************************************************************************
 //
@@ -107,7 +108,7 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // ADC Sequence 0
     IntDefaultHandler,                      // ADC Sequence 1
     IntDefaultHandler,                      // ADC Sequence 2
-    IntDefaultHandler,                      // ADC Sequence 3
+    TouchScreenIntHandler,                  // ADC Sequence 3,                      // ADC Sequence 3
     IntDefaultHandler,                      // Watchdog timer
     Timer0IntHandler,                      // Timer 0 subtimer A
     IntDefaultHandler,                      // Timer 0 subtimer B
