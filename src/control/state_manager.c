@@ -1,13 +1,15 @@
-/*
- * Control subsystem task scaffold.
+/**
+ * @file state_manager.c
+ * @brief Control state machine implementation.
  *
- * This is the entry point for control-owned RTOS tasks. Keep high-level
- * control logic in the control module and let app_tasks.c only wire it in.
+ * Owns high-level transitions between stopped, starting, running, E-stop, and
+ * fault-latched system states. External modules post event bits through the
+ * public StateManager_Trigger* API; this task serialises those events and
+ * invokes the motor subsystem as needed.
  */
 
 #include <stdint.h>
 #include <stdbool.h>
-
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -27,20 +29,58 @@
 /** @brief State manager task priority (above motor task at +2). */
 #define STATE_MANAGER_PRIORITY      (tskIDLE_PRIORITY + 3)
 
+/** @brief Initial closed-loop target used when starting the motor. */
 #define SAFE_START_RPM             400U
+
+/** @brief Hall edge count required before considering startup feedback valid. */
 #define HALL_VALID_EDGE_COUNT      12U
 
-//Private state variables
+/** @brief Protects access to s_state for readers outside the state task. */
 static SemaphoreHandle_t s_stateMutex;
+
+/** @brief Event group used to receive asynchronous state transition requests. */
 static EventGroupHandle_t s_events;
+
+/** @brief Current high-level system state. */
 static SystemState_t s_state;
+
+/** @brief Reserved desired speed setpoint for future UI integration. */
 static uint32_t s_desiredSpeed;
+
+/** @brief FreeRTOS software timer used to blink LEDs during E-stop/fault. */
 static TimerHandle_t s_estopBlinkTimer = NULL;
 
 
+/**
+ * @brief State manager task entry point.
+ *
+ * Waits for start, E-stop, and fault-acknowledge event bits and advances the
+ * control state machine in response.
+ *
+ * @param pvParameters Unused FreeRTOS task parameter.
+ */
 static void prvStateManagerTask(void *pvParameters);
+
+/**
+ * @brief Change the current state and update state-dependent indicators.
+ *
+ * @param newState State to enter.
+ */
 static void prvSetState(SystemState_t newState);
+
+/**
+ * @brief Convert a system state enum to a printable string.
+ *
+ * @param state State value to convert.
+ * @return Pointer to a static string literal.
+ */
 static const char *prvStateToString(SystemState_t state);
+
+/**
+ * @brief Toggle board LEDs while E-stop or fault indication is active.
+ *
+ * @param xTimer FreeRTOS timer handle, unused.
+ */
 static void prvEStopBlinkCallback(TimerHandle_t xTimer);
 
 void vCreateStateManagerTasks(void)
@@ -59,9 +99,9 @@ void vCreateStateManagerTasks(void)
  *---------------------------------------------------------------------------*/
 
 /**
- * @brief Toggles LED D1 every 250ms when E-stop or fault is active.
+ * @brief Toggles all board LEDs every 250ms when E-stop or fault is active.
  *
- * This runs from the FreeRTOS timer daemon — no extra task stack needed.
+ * This runs from the FreeRTOS timer daemon, so no extra task stack is needed.
  */
 static void prvEStopBlinkCallback(TimerHandle_t xTimer)
 {
@@ -81,11 +121,11 @@ static void prvStateManagerTask(void *pvParameters)
     for (;;)
     {
         EventBits_t fired = xEventGroupWaitBits(
-            s_events,                                      
-            EVENT_START | EVENT_E_STOP | EVENT_FAULT_ACK,  
-            pdTRUE,                                        
-            pdFALSE,                                       
-            pdMS_TO_TICKS(20)                              
+            s_events,
+            EVENT_START | EVENT_E_STOP | EVENT_FAULT_ACK,
+            pdTRUE,
+            pdFALSE,
+            pdMS_TO_TICKS(20)
         );
 
         if (((fired & EVENT_E_STOP) != 0U) &&

@@ -1,5 +1,6 @@
-/*
- * Board switch handling.
+/**
+ * @file switch_tasks.c
+ * @brief Board switch handling implementation.
  *
  * Owns the GPIO interrupt setup and the small tasks that translate board
  * switch presses into control events.
@@ -22,15 +23,38 @@
 #include "debug/debug_log.h"
 #include "hardware/switch_tasks.h"
 
+/** @brief Priority for switch event processing tasks. */
 #define SWITCH_TASK_PRIORITY     (tskIDLE_PRIORITY + 2)
+
+/** @brief Minimum accepted time between switch edges for software debounce. */
 #define SWITCH_DEBOUNCE_TICKS    pdMS_TO_TICKS(100)
 
+/** @brief Semaphore signalled by the switch ISR when SW1 is pressed. */
 static SemaphoreHandle_t s_sw1Semaphore = NULL;
+
+/** @brief Semaphore signalled by the switch ISR when SW2 is pressed. */
 static SemaphoreHandle_t s_sw2Semaphore = NULL;
+
+/** @brief Last accepted switch edge time, used for debounce. */
 static volatile TickType_t s_lastButtonTick = 0;
 
+/**
+ * @brief Configure board switch GPIO pins and enable the Port J interrupt.
+ */
 static void prvConfigureButtons(void);
+
+/**
+ * @brief Task that converts SW1 presses into start requests.
+ *
+ * @param pvParameters Unused FreeRTOS task parameter.
+ */
 static void prvTaskSW1(void *pvParameters);
+
+/**
+ * @brief Task that converts SW2 presses into E-stop or fault-ack requests.
+ *
+ * @param pvParameters Unused FreeRTOS task parameter.
+ */
 static void prvTaskSW2(void *pvParameters);
 
 void vCreateSwitchTasks(void)
@@ -111,8 +135,16 @@ static void prvTaskSW2(void *pvParameters)
     {
         if (xSemaphoreTake(s_sw2Semaphore, portMAX_DELAY) == pdPASS)
         {
-            StateManager_TriggerEStop();
-            DebugPrintf(DBG_HARDWARE "SW2 pressed: E-STOP event fired\r\n");
+            if (StateManager_GetState() == SYSTEM_STATE_FAULT_LATCHED)
+            {
+                StateManager_TriggerFaultAck();
+                DebugPrintf(DBG_HARDWARE "SW2 pressed: FAULT ACK event fired\r\n");
+            }
+            else
+            {
+                StateManager_TriggerEStop();
+                DebugPrintf(DBG_HARDWARE "SW2 pressed: E-STOP event fired\r\n");
+            }
         }
     }
 }

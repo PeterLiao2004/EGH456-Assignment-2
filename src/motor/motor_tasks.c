@@ -187,7 +187,10 @@ static void prvKickStartMotor(void)
     g_hallEdgeCount = 0U;
     taskEXIT_CRITICAL();
 
-    updateMotor(hall_a, hall_b, hall_c);
+    if (g_outputsEnabled)
+    {
+        updateMotor(hall_a, hall_b, hall_c);
+    }
 }
 
 /**
@@ -403,8 +406,8 @@ static void prvMotorTask(void *pvParameters)
 /**
  * @brief Hall sensor edge interrupt handler.
  *
- * Reads the latest hall states, advances commutation via MotorLib, and
- * increments the edge counter used for speed measurement.
+ * Reads the latest hall states and increments the edge counter used for speed
+ * measurement. Commutation only advances while motor outputs are enabled.
  */
 void HallSensorHandler(void)
 {
@@ -424,7 +427,10 @@ void HallSensorHandler(void)
     GPIOIntClear(HALL_B_PORT, HALL_B_PIN);
     GPIOIntClear(HALL_C_PORT, HALL_C_PIN);
 
-    updateMotor(hall_a, hall_b, hall_c);
+    if (g_outputsEnabled)
+    {
+        updateMotor(hall_a, hall_b, hall_c);
+    }
 }
 
 /*-----------------------------------------------------------------------------
@@ -537,10 +543,16 @@ void Motor_Stop(void)
 void Motor_EStop(void)
 {
     taskENTER_CRITICAL();
-    g_targetRpm    = 0U;
-    g_referenceRpm = 0U;
-    g_piIntegral   = 0;
+    g_outputsEnabled = false;
+    g_targetRpm      = 0U;
+    g_referenceRpm   = 0U;
+    g_piIntegral     = 0;
+    g_motorDuty      = 0U;
     taskEXIT_CRITICAL();
+
+    setDuty(0);
+    stopMotor(1);
+    DebugPrintf(DBG_MOTOR "Motor_EStop: outputs disabled\r\n");
 }
 
 void Motor_Disable(void)

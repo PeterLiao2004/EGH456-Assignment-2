@@ -18,7 +18,7 @@
  *   - Entering STARTING:       Motor_Start(SAFE_START_RPM);
  *   - User adjusts speed:      Motor_SetSpeed(user_rpm);
  *   - User requests stop:      Motor_Stop();                  (normal ramp)
- *   - E-stop triggered:        Motor_EStop();                 (emergency ramp)
+ *   - E-stop triggered:        Motor_EStop();                 (immediate cut)
  *   - Entering FAULT_LATCHED:  Motor_Disable();
  *
  * State transitions are detected by polling status helpers:
@@ -113,13 +113,11 @@ void Motor_SetSpeed(uint32_t rpm);
 void Motor_Stop(void);
 
 /**
- * @brief Decelerate the motor to zero at the emergency deceleration rate.
+ * @brief Immediately cut motor output for an emergency stop.
  *
- * Used when transitioning into MOTOR_STATE_ESTOP_BRAKING. The reference RPM
- * ramps from its current value to zero at the emergency rate (1000 RPM/s).
- * Outputs remain enabled so the PI controller continues to track the ramp.
- * The state manager should poll Motor_HasReachedZero() and call
- * Motor_Disable() once the motor has come to rest.
+ * Used when transitioning into MOTOR_STATE_ESTOP_BRAKING. This forces duty to
+ * zero, disables the motor driver through MotorLib, and clears the controller
+ * reference/integrator so no further drive is commanded.
  */
 void Motor_EStop(void);
 
