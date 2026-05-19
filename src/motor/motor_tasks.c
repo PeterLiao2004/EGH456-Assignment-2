@@ -52,6 +52,7 @@
 #include "drivers/rtos_hw_drivers.h"
 #include "utils/uartstdio.h"
 #include "debug/debug_log.h"
+#include "hardware/current_sense.h"
 /* Motor library include. */
 #include "motorlib.h"
 
@@ -440,6 +441,7 @@ void HallSensorHandler(void)
 void Motor_Init(void)
 {
     initMotorLib(MOTOR_PWM_PERIOD);
+    CurrentSense_Init();
 
     /* Start in a known safe state. */
     setDuty(0);
@@ -619,6 +621,11 @@ uint16_t Motor_GetDuty(void)
     taskEXIT_CRITICAL();
 
     return duty;
+}
+
+float Motor_GetPowerWatts(void)
+{
+    return CurrentSense_GetPowerWatts();
 }
 
 uint32_t Motor_GetReferenceRpm(void)

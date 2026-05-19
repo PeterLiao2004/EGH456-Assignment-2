@@ -181,6 +181,16 @@ uint32_t Motor_GetSpeed(void);
 uint16_t Motor_GetDuty(void);
 
 /**
+ * @brief Get the estimated motor electrical power draw.
+ *
+ * Uses the hardware current-sense ADC channels for phases B and C, estimates
+ * phase A, and returns approximate electrical power in watts.
+ *
+ * @return Estimated motor power in watts.
+ */
+float Motor_GetPowerWatts(void);
+
+/**
  * @brief Get the current ramped reference RPM.
  *
  * This is the controller's instantaneous target, which tracks the desired
