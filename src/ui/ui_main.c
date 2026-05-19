@@ -1,23 +1,8 @@
 
 /******************************************************************************
  *
- * This project provides a simple demonstration on how to control GPIO as both
- * inputs and outputs and how to use a binary semaphore to defer ISR processing
- * to an individual task to keep the ISR processing very light.  The four LEDs
- * on the EK-TM4C1294XL are configured with the standard PinoutSet() function.
- * The buttons are used to control which LED is on.  The default is LED D1.
- * Pressing SW1 moves the lit LED down by one and pressing SW2 moves it up by
- * one.  Both switches will wrap around.
- *
- * main() creates one binary semaphore and one task.  It then starts the
- * scheduler.
- *
- * The binary semaphore is used to keep the LED task in a blocked state until
- * an interrupt fires from a switch input.
- *
- * The LED task configures the buttons, initializes the LEDs, and starts the
- * task which will handle the processing for the input switches to toggle the
- * LEDs.
+ * Legacy UI-only entry point. The application entry point is src/main.c;
+ * switch handling is owned by the hardware module.
  *
  * This example uses UARTprintf for output of UART messages.  UARTprintf is not
  * a thread-safe API and is only being used for simplicity of the demonstration
@@ -68,11 +53,6 @@
 /* The system clock frequency. */
 extern volatile uint32_t g_ui32SysClock;
 
-/* Global for binary semaphore shared between tasks. */
-extern SemaphoreHandle_t xSW1Semaphore;
-
-extern SemaphoreHandle_t xSW2Semaphore;
-
 extern SemaphoreHandle_t xUARTMutex;
 
 extern SemaphoreHandle_t xQueueDroppingMutex;
@@ -89,17 +69,11 @@ int ui_main(void)
     /* Prepare the hardware to run this example. */
     prvSetupHardware();
 
-    /* Create the binary semaphore used to synchronize the button ISR and the
-     * button processing task. */
-    xSW1Semaphore = xSemaphoreCreateBinary();
-
-    xSW2Semaphore = xSemaphoreCreateBinary();
-
     xUARTMutex = xSemaphoreCreateMutex();
 
     xQueueDroppingMutex = xSemaphoreCreateMutex();
 
-    if ((xSW1Semaphore != NULL) && (xSW2Semaphore != NULL) && (xUARTMutex != NULL) && (xQueueDroppingMutex != NULL))
+    if ((xUARTMutex != NULL) && (xQueueDroppingMutex != NULL))
     {
         /* Configure application specific hardware and initialize the task thread. */
         vCreateUiTasks();

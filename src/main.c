@@ -35,9 +35,6 @@ volatile uint32_t g_ui32SysClock;
 
 /* Global semaphores shared between ISRs and tasks. */
 SemaphoreHandle_t xTimerSemaphore = NULL;
-SemaphoreHandle_t xButtonSemaphore = NULL;
-SemaphoreHandle_t xSW1Semaphore = NULL;
-SemaphoreHandle_t xSW2Semaphore = NULL;
 SemaphoreHandle_t xUARTMutex = NULL;
 SemaphoreHandle_t xQueueDroppingMutex = NULL;
 
@@ -59,19 +56,12 @@ int main( void )
 
     sensor_main();
 
-    /* Create the binary semaphore used to synchronize the button ISR and the
-     * button processing task. */
+    /* Create shared synchronization objects. */
     xTimerSemaphore = xSemaphoreCreateBinary();
-    xButtonSemaphore = xSemaphoreCreateBinary();
-    xSW1Semaphore = xSemaphoreCreateBinary();
-    xSW2Semaphore = xSemaphoreCreateBinary();
     xUARTMutex = xSemaphoreCreateMutex();
     xQueueDroppingMutex = xSemaphoreCreateMutex();
 
     if ( (xTimerSemaphore != NULL) &&
-         (xButtonSemaphore != NULL) &&
-         (xSW1Semaphore != NULL) &&
-         (xSW2Semaphore != NULL) &&
          (xUARTMutex != NULL) &&
          (xQueueDroppingMutex != NULL) )
     {

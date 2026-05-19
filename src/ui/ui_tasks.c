@@ -18,14 +18,6 @@
 #include "semphr.h"
 #include "event_groups.h"
 
-/* Hardware includes. */
-#include "inc/hw_ints.h"
-#include "inc/hw_memmap.h"
-#include "driverlib/gpio.h"
-#include "driverlib/interrupt.h"
-#include "driverlib/sysctl.h"
-#include "drivers/rtos_hw_drivers.h"
-
 /* Sensor includes. */
 #include "drivers/opt3001.h"
 
@@ -66,11 +58,6 @@ extern volatile uint32_t g_ui32SysClock;
 
 extern void i2cOptDriverInit(void);
 
-volatile uint32_t g_ui32TimeStamp = 0;
-volatile static uint32_t g_pui32ButtonPressed = 0;
-
-extern SemaphoreHandle_t xSW1Semaphore;
-extern SemaphoreHandle_t xSW2Semaphore;
 extern SemaphoreHandle_t xUARTMutex;
 extern SemaphoreHandle_t xQueueDroppingMutex;
 
@@ -79,14 +66,10 @@ QueueHandle_t xSystemStatusQueue = NULL; // motor/control data -> UI
 QueueHandle_t xUiCommandQueue = NULL; // UI data -> motor/control
 static EventGroupHandle_t xSensorEventGroup = NULL;
 
-static void prvTaskSW1(void *pvParameters);
-static void prvTaskSW2(void *pvParameters);
 static void prvDisplayTask(void *pvParameters);
 static void vFormatTimeFromTicks(TickType_t startTick, char *timeString);
 
 void vCreateUiTasks(void);
-
-static void prvConfigureButton(void);
 
 typedef struct
 {
@@ -171,8 +154,6 @@ void vCreateUiTasks(void)
 {
     BaseType_t taskCreated;
 
-    prvConfigureButton();
-
     xSensorEventGroup = xEventGroupCreate();
     if (xSensorEventGroup == NULL)
     {
@@ -217,32 +198,6 @@ void vCreateUiTasks(void)
         return;
     }
 
-    taskCreated = xTaskCreate(prvTaskSW1,
-                              "SW1",
-                              configMINIMAL_STACK_SIZE,
-                              NULL,
-                              tskIDLE_PRIORITY + 2,
-                              NULL);
-    if (taskCreated == pdPASS)
-    {
-        DebugPrintf(DBG_INIT "SW1 task created\r\n");
-    } else {
-        DebugPrintf(DBG_ERROR "SW1 task creation failed\r\n");
-    }
-
-    taskCreated = xTaskCreate(prvTaskSW2,
-                              "SW2",
-                              configMINIMAL_STACK_SIZE,
-                              NULL,
-                              tskIDLE_PRIORITY + 2,
-                              NULL);
-    if (taskCreated == pdPASS)
-    {
-        DebugPrintf(DBG_INIT "SW2 task created\r\n");
-    } else {
-        DebugPrintf(DBG_ERROR "SW2 task creation failed\r\n");
-    }
-
     taskCreated = xTaskCreate(prvDisplayTask,
                               "Display",
                               configMINIMAL_STACK_SIZE,
@@ -252,41 +207,6 @@ void vCreateUiTasks(void)
     if (taskCreated != pdPASS)
     {
         UARTprintf("Display task creation failed\r\n");
-    }
-}
-
-/*-----------------------------------------------------------*/
-
-static void prvTaskSW1(void *pvParameters)
-{
-    (void)pvParameters;
-
-    for (;;)
-    {
-        if (xSemaphoreTake(xSW1Semaphore, portMAX_DELAY) == pdPASS)
-        {
-            // StateManager_SetDesiredSpeed(1000U);
-            StateManager_TriggerStart();
-
-            DebugPrintf(DBG_HARDWARE "SW1 pressed: START event fired\r\n");
-        }
-    }
-}
-
-/*-----------------------------------------------------------*/
-
-static void prvTaskSW2(void *pvParameters)
-{
-    (void)pvParameters;
-
-    for (;;)
-    {
-        if (xSemaphoreTake(xSW2Semaphore, portMAX_DELAY) == pdPASS)
-        {
-            StateManager_TriggerEStop();
-
-            DebugPrintf(DBG_HARDWARE "SW2 pressed: E-STOP event fired\r\n");
-        }
     }
 }
 
@@ -563,53 +483,3 @@ static void prvDisplayTask(void *pvParameters)
         }
     }
 }
-
-/*-----------------------------------------------------------*/
-
-static void prvConfigureButton(void)
-{
-    ButtonsInit();
-
-    GPIOIntTypeSet(BUTTONS_GPIO_BASE, ALL_BUTTONS, GPIO_FALLING_EDGE);
-
-    GPIOIntEnable(BUTTONS_GPIO_BASE, ALL_BUTTONS);
-
-    IntEnable(INT_GPIOJ);
-}
-
-/*-----------------------------------------------------------*/
-
-void xButtonsHandler(void)
-{
-    BaseType_t xLEDTaskWoken;
-    uint32_t ui32Status;
-    TickType_t tickNow;
-
-    xLEDTaskWoken = pdFALSE;
-
-    ui32Status = GPIOIntStatus(BUTTONS_GPIO_BASE, true);
-
-    GPIOIntClear(BUTTONS_GPIO_BASE, ui32Status);
-
-    tickNow = xTaskGetTickCountFromISR();
-
-    if ((tickNow - g_ui32TimeStamp) > 100)
-    {
-        if ((ui32Status & USR_SW1) == USR_SW1)
-        {
-            g_pui32ButtonPressed = USR_SW1;
-            xSemaphoreGiveFromISR(xSW1Semaphore, &xLEDTaskWoken);
-        }
-        else if ((ui32Status & USR_SW2) == USR_SW2)
-        {
-            g_pui32ButtonPressed = USR_SW2;
-            xSemaphoreGiveFromISR(xSW2Semaphore, &xLEDTaskWoken);
-        }
-
-        portYIELD_FROM_ISR(xLEDTaskWoken);
-    }
-
-    g_ui32TimeStamp = tickNow;
-}
-
-/*-----------------------------------------------------------*/

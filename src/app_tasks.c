@@ -2,9 +2,9 @@
  * Barebones application task template.
  *
  * This file provides a minimal FreeRTOS setup for a new project:
- * - a periodic timer interrupt,
- * - a button interrupt,
- * - UART logging tasks that respond to those events.
+ * - motor/control task creation,
+ * - board switch task creation,
+ * - UI task creation.
  */
 
 /* Standard includes. */
@@ -29,6 +29,7 @@
 /* Application includes. */
 #include "motor/motor_tasks.h"
 #include "control/state_manager.h"
+#include "hardware/switch_tasks.h"
 #include "sensors/sensor_tasks.h"
 #include "ui/ui_tasks.h"
 
@@ -36,20 +37,13 @@
 
 extern volatile uint32_t g_ui32SysClock;
 
-// extern SemaphoreHandle_t xTimerSemaphore;
-// extern SemaphoreHandle_t xButtonSemaphore;
-
-static volatile uint32_t g_ui32TimeStamp = 0;
-static volatile uint32_t g_ui32ButtonPressCount = 0;
-
-/*-----------------------------------------------------------*/
-
 void vCreateAppTasks(void)
 {
 
     /* Create the application tasks. */
     vCreateMotorTasks();
     vCreateStateManagerTasks();
+    vCreateSwitchTasks();
     // vCreateSensorTasks();
     vCreateUiTasks();
 
