@@ -10,7 +10,7 @@
  *     Motor_Start(initial_rpm)  ->  enable + kick + ramp at NORMAL rate
  *     Motor_SetSpeed(rpm)       ->  change target, NORMAL ramp rate
  *     Motor_Stop()              ->  ramp to 0 at NORMAL rate
- *     Motor_EStop()             ->  immediate PWM cut, clear reference + integral
+ *     Motor_EStop()             ->  ramp to 0 at ESTOP_RAMP_RPM_PER_S, clear integral
  *     Motor_Disable()           ->  immediate output disable, clear state
  *
  * Internally the motor task owns NORMAL_RAMP_RPM_PER_S for ramp-based
@@ -102,7 +102,10 @@ static int32_t  prvClampInt32(int32_t value,
 #define MOTOR_DUTY_MAX          49U
 
 /* Ramp rate in RPM/s used for Motor_Start / Motor_SetSpeed / Motor_Stop. */
-#define NORMAL_RAMP_RPM_PER_S   500U
+#define NORMAL_RAMP_RPM_PER_S   450U
+
+/* Ramp rate in RPM/s used during E-Stop braking. */
+#define ESTOP_RAMP_RPM_PER_S    1000U
 
 /* --- PI controller --- */
 #define PI_SCALE                1000L
@@ -136,6 +139,14 @@ static uint32_t g_referenceRpm     = 0U;
 
 /* PROTECT: PI controller integrator. */
 static int32_t  g_piIntegral       = 0;
+
+/* Set by Motor_EStop(), cleared by Motor_Disable(). Tells the motor task to
+   skip the PI and cut power during E-Stop deceleration. */
+static volatile bool g_eStopBraking = false;
+
+/* Measured acceleration in RPM/s (negative = decelerating). Updated each
+   speed sample alongside g_motorRpm. */
+static volatile int32_t g_motorAcceleration = 0;
 
 /*-----------------------------------------------------------------------------
  * Task creation
@@ -222,7 +233,12 @@ static void prvUpdateMeasuredMotorSpeed(uint32_t sample_ms,
     raw_rpm = (delta_edges * (60000U / HALL_EDGES_PER_MECH_REV)) / sample_ms;
 
     /* IIR: filtered = 0.75 * old + 0.25 * raw */
+    uint32_t prev_rpm = g_motorRpm;
     g_motorRpm = ((3U * g_motorRpm) + raw_rpm) / 4U;
+
+    /* Acceleration in RPM/s = delta_rpm * 1000 / sample_ms */
+    g_motorAcceleration = ((int32_t)g_motorRpm - (int32_t)prev_rpm)
+                          * (int32_t)(1000U / sample_ms);
 }
 
 /**
@@ -379,10 +395,22 @@ static void prvMotorTask(void *pvParameters)
             uint32_t duty;
 
             prvUpdateSpeedRamp();
-            duty = prvUpdatePIController(g_referenceRpm, g_motorRpm);
 
-            setDuty(duty);
-            g_motorDuty = (uint16_t)duty;
+            if (g_eStopBraking)
+            {
+                /* During E-Stop, disable motor outputs and reset integral.
+                   stopMotor(1) must accompany setDuty(0) to fully cut drive. */
+                g_piIntegral = 0;
+                setDuty(0U);
+                stopMotor(1);
+                g_motorDuty = 0U;
+            }
+            else
+            {
+                duty = prvUpdatePIController(g_referenceRpm, g_motorRpm);
+                setDuty(duty);
+                g_motorDuty = (uint16_t)duty;
+            }
         }
         else
         {
@@ -452,6 +480,7 @@ void Motor_Init(void)
     g_referenceRpm   = 0U;
     g_activeRampRate = NORMAL_RAMP_RPM_PER_S;
     g_piIntegral     = 0;
+    g_eStopBraking   = false;
 
     g_motorInitialised = true;
 }
@@ -537,16 +566,22 @@ void Motor_Stop(void)
 void Motor_EStop(void)
 {
     taskENTER_CRITICAL();
-    g_targetRpm    = 0U;
-    g_referenceRpm = 0U;
-    g_piIntegral   = 0;
+    g_targetRpm      = 0U;
+    g_activeRampRate = ESTOP_RAMP_RPM_PER_S;
+    g_piIntegral     = 0;
+    g_eStopBraking   = true;
     taskEXIT_CRITICAL();
+
+    /* Cut motor drive immediately — don't wait for the next task tick. */
+    setDuty(0U);
+    stopMotor(1);
 }
 
 void Motor_Disable(void)
 {
     taskENTER_CRITICAL();
     g_outputsEnabled = false;
+    g_eStopBraking   = false;
     g_targetRpm      = 0U;
     g_referenceRpm   = 0U;
     g_piIntegral     = 0;
@@ -629,4 +664,15 @@ uint32_t Motor_GetTargetRpm(void)
     taskEXIT_CRITICAL();
 
     return rpm;
+}
+
+int32_t Motor_GetAcceleration(void)
+{
+    int32_t accel;
+
+    taskENTER_CRITICAL();
+    accel = g_motorAcceleration;
+    taskEXIT_CRITICAL();
+
+    return accel;
 }

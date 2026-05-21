@@ -203,4 +203,14 @@ uint32_t Motor_GetReferenceRpm(void);
  */
 uint32_t Motor_GetTargetRpm(void);
 
+/**
+ * @brief Get the measured motor acceleration in RPM/s.
+ *
+ * Computed each speed sample (every 50 ms) as the change in filtered RPM
+ * divided by the sample period. Positive = accelerating, negative = decelerating.
+ *
+ * @return Acceleration in RPM/s.
+ */
+int32_t Motor_GetAcceleration(void);
+
 #endif /* MOTOR_TASKS_H */
